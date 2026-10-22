@@ -56,6 +56,7 @@ fn each_mutation_publishes_exactly_one_event() {
         (
             "suspend_issuer",
             std::boxed::Box::new(|| deployment.issuers.suspend_issuer(
+                &hash(&deployment.env, 0x81),
                 &deployment.issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32])
             ))
@@ -63,6 +64,7 @@ fn each_mutation_publishes_exactly_one_event() {
         (
             "reactivate_issuer",
             std::boxed::Box::new(|| deployment.issuers.reactivate_issuer(
+                &hash(&deployment.env, 0x82),
                 &deployment.issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32])
             ))
@@ -123,12 +125,14 @@ fn a_multi_step_sequence_publishes_events_in_invocation_order() {
     record(deployment.capture(|| deployment.config.pause()));
     record(deployment.capture(|| {
         deployment.issuers.suspend_issuer(
+            &hash(&deployment.env, 0x81),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )
     }));
     record(deployment.capture(|| {
         deployment.issuers.revoke_issuer(
+            &hash(&deployment.env, 0x83),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )
@@ -282,6 +286,7 @@ fn no_event_payload_carries_protected_data() {
         (
             "suspend_issuer",
             std::boxed::Box::new(|| deployment.issuers.suspend_issuer(
+                &hash(&deployment.env, 0x81),
                 &deployment.issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32])
             ))
@@ -289,6 +294,7 @@ fn no_event_payload_carries_protected_data() {
         (
             "reactivate_issuer",
             std::boxed::Box::new(|| deployment.issuers.reactivate_issuer(
+                &hash(&deployment.env, 0x82),
                 &deployment.issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32])
             ))
@@ -304,6 +310,7 @@ fn no_event_payload_carries_protected_data() {
         (
             "revoke_issuer",
             std::boxed::Box::new(|| deployment.issuers.revoke_issuer(
+                &hash(&deployment.env, 0x83),
                 &deployment.issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32])
             ))
@@ -387,6 +394,7 @@ fn no_event_is_published_by_a_contract_that_did_not_act() {
 
     let issuer_events = deployment.capture(|| {
         deployment.issuers.suspend_issuer(
+            &hash(&deployment.env, 0x81),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )

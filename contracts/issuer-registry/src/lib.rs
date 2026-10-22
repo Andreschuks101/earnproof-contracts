@@ -1,36 +1,29 @@
 #![no_std]
 
 use earnproof_shared::{
-    ContractError, GenesisRecord, GovernanceRole, GovernanceRoleAssignment, InterfaceVersion,
-    IssuerAssuranceLevelCommitment, IssuerError, IssuerPolicyCommitments, IssuerQueryStatus,
-    IssuerRecord, IssuerStatus, IssuerStatusResult, MigrationStatus, RotationRecord,
-    SigningKeyCommitment, SigningKeyLifecycleRecord, SigningKeyLifecycleTransition, TtlStatus,
-    UpgradeApproval, UpgradeReceipt, ISSUER_ASSURANCE_COMMITMENT_VERSION,
-    ISSUER_ASSURANCE_HISTORY_CAPACITY, ISSUER_REGISTRY_INTERFACE_VERSION,
-    MAX_ISSUER_ASSURANCE_HISTORY_PAGE, MAX_ISSUER_ASSURANCE_LEVEL, MAX_ISSUER_STATUS_BATCH,
-    MAX_MIGRATION_BATCH, MAX_SIGNING_KEY_LIFECYCLE_PAGE, METADATA_REVISION_INITIAL,
-    MIGRATION_STATUS_VERSION, SIGNING_KEY_LIFECYCLE_HISTORY_CAPACITY, TTL_EXTEND_TO_LEDGERS,
-    AdminTransferState, AdminTransferStatus, CompromisedSigningKeyRecord, ContractError,
-    GenesisRecord, GovernanceAssignmentState, GovernanceRole, GovernanceRoleAssignment,
-    InterfaceVersion, IssuerError, IssuerPolicyCommitments, IssuerQueryStatus, IssuerRecord,
-    IssuerStatus, IssuerStatusResult, MigrationStatus, RotationRecord, SigningKeyCommitment,
+    compute_migration_checkpoint_checksum, make_query_envelope_header, AdminTransferState,
+    AdminTransferStatus, CapacityEnvelope, CheckpointEnvelope, CompromisedSigningKeyRecord,
+    ContractError, ErrorCatalogDescriptor, GenesisRecord, GovernanceAssignmentState,
+    GovernanceRole, GovernanceRoleAssignment, GovernanceRoleState, HistoryEnvelope,
+    InterfaceVersion, IssuerAssuranceLevelCommitment, IssuerError, IssuerPolicyCommitments,
+    IssuerQueryStatus, IssuerRecord, IssuerRevocationResult, IssuerRevocationState,
+    IssuerRevocationTombstone, IssuerStatus, IssuerStatusResult, MigrationCheckpoint,
+    MigrationStatus, RotationRecord, SigningKeyCommitment, SigningKeyLifecycleRecord,
+    SigningKeyLifecycleTransition, SuccessorNominationRecord, SuccessorState, SuccessorStatus,
     TtlStatus, UpgradeApproval, UpgradeReceipt, ADMIN_TRANSFER_EXPIRY_LEDGERS,
-    ISSUER_REGISTRY_INTERFACE_VERSION, MAX_GOVERNANCE_ROLE_ACTIVATION_DELAY_LEDGERS,
-    MAX_ISSUER_STATUS_BATCH, MAX_MIGRATION_BATCH, MAX_SIGNING_KEY_COMPROMISE_HISTORY_PAGE,
-    METADATA_REVISION_INITIAL, MIGRATION_STATUS_VERSION, TTL_EXTEND_TO_LEDGERS,
-    TTL_THRESHOLD_LEDGERS, UPGRADE_APPROVAL_EXPIRY_LEDGERS, UPGRADE_TIMELOCK_LEDGERS,
-    ContractError, GenesisRecord, GovernanceRole, GovernanceRoleAssignment, InterfaceVersion,
-    IssuerError, IssuerPolicyCommitments, IssuerQueryStatus, IssuerRecord, IssuerRevocationResult,
-    IssuerRevocationState, IssuerRevocationTombstone, IssuerStatus, IssuerStatusResult,
-    MigrationStatus, RotationRecord, SigningKeyCommitment, TtlStatus, UpgradeApproval,
-    UpgradeReceipt, ISSUER_REGISTRY_INTERFACE_VERSION, ISSUER_REVOCATION_TOMBSTONE_VERSION,
-    MAX_ISSUER_STATUS_BATCH, MAX_MIGRATION_BATCH, METADATA_REVISION_INITIAL,
-    MIGRATION_STATUS_VERSION, TTL_EXTEND_TO_LEDGERS, TTL_THRESHOLD_LEDGERS,
+    ERROR_CATALOG_VERSION, ISSUER_ASSURANCE_COMMITMENT_VERSION, ISSUER_ASSURANCE_HISTORY_CAPACITY,
+    ISSUER_REGISTRY_ERROR_MAX, ISSUER_REGISTRY_ERROR_MIN, ISSUER_REGISTRY_INTERFACE_VERSION,
+    ISSUER_REVOCATION_TOMBSTONE_VERSION, MAX_GOVERNANCE_ROLE_ACTIVATION_DELAY_LEDGERS,
+    MAX_ISSUER_ASSURANCE_HISTORY_PAGE, MAX_ISSUER_ASSURANCE_LEVEL, MAX_ISSUER_STATUS_BATCH,
+    MAX_MIGRATION_BATCH, MAX_SIGNING_KEY_COMPROMISE_HISTORY_PAGE, MAX_SIGNING_KEY_LIFECYCLE_PAGE,
+    METADATA_REVISION_INITIAL, MIGRATION_CHECKPOINT_VERSION, MIGRATION_STATUS_VERSION,
+    SIGNING_KEY_LIFECYCLE_HISTORY_CAPACITY, TTL_EXTEND_TO_LEDGERS, TTL_THRESHOLD_LEDGERS,
     UPGRADE_APPROVAL_EXPIRY_LEDGERS, UPGRADE_TIMELOCK_LEDGERS,
 };
 use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, BytesN, Env, Vec};
 
 const ISSUER_ROTATION_EXPIRY_LEDGERS: u32 = 518_400;
+const MAX_BULK_SUSPENSION_BATCH: u32 = 20;
 
 #[contract]
 pub struct IssuerRegistryContract;
@@ -49,6 +42,9 @@ enum DataKey {
     /// Monotonically-increasing contract version.  Prevents downgrade.
     ContractVersion,
     Successor,
+    SuccessorActivationDelay,
+    SuccessorNomination,
+    MigrationCheckpoint,
     Decommissioned,
     PendingAdmin,
     PendingAdminNominatedAt,
@@ -305,6 +301,8 @@ pub struct SigningKeyLifecycleChanged {
     pub transition: SigningKeyLifecycleTransition,
     pub sequence: u64,
     pub effective_ledger: u32,
+}
+
 /// Emitted once when an issuer signing-key commitment is declared compromised.
 #[contractevent]
 pub struct IssuerSigningKeyCompromised {
@@ -421,6 +419,8 @@ impl IssuerRegistryContract {
         } else {
             GovernanceRoleState::Expired
         }
+    }
+
     pub fn get_governance_assignment_state(
         env: Env,
         role: GovernanceRole,
@@ -779,9 +779,24 @@ impl IssuerRegistryContract {
         Self::require_valid_issuer_address(&successor)?;
         Self::require_auth(&admin);
         Self::consume_proposal(&env, &proposal_id).map_err(|_| IssuerError::InvalidTransition)?;
+        let delay = env
+            .storage()
+            .instance()
+            .get(&DataKey::SuccessorActivationDelay)
+            .unwrap_or(0u32);
+        let current_ledger = env.ledger().sequence();
+        let earliest_activation_ledger = current_ledger.saturating_add(delay);
+        let record = SuccessorNominationRecord {
+            successor: successor.clone(),
+            nominated_at_ledger: current_ledger,
+            earliest_activation_ledger,
+        };
         env.storage()
             .instance()
             .set(&DataKey::Successor, &successor);
+        env.storage()
+            .instance()
+            .set(&DataKey::SuccessorNomination, &record);
         SuccessorNominated {
             proposal_id,
             successor: successor.clone(),
@@ -795,6 +810,79 @@ impl IssuerRegistryContract {
         env.storage().instance().get(&DataKey::Successor)
     }
 
+    pub fn get_successor_activation_delay(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SuccessorActivationDelay)
+            .unwrap_or(0u32)
+    }
+
+    pub fn set_successor_activation_delay(env: Env, delay: u32) -> Result<(), IssuerError> {
+        Self::ensure_not_decommissioned(&env)?;
+        let admin = Self::get_admin(env.clone()).map_err(|_| IssuerError::IssuerNotFound)?;
+        Self::require_auth(&admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::SuccessorActivationDelay, &delay);
+        Ok(())
+    }
+
+    pub fn cancel_successor_nomination(
+        env: Env,
+        proposal_id: BytesN<32>,
+    ) -> Result<(), IssuerError> {
+        Self::ensure_not_decommissioned(&env)?;
+        let admin = Self::get_admin(env.clone()).map_err(|_| IssuerError::IssuerNotFound)?;
+        Self::require_auth(&admin);
+        Self::consume_proposal(&env, &proposal_id).map_err(|_| IssuerError::InvalidTransition)?;
+        env.storage().instance().remove(&DataKey::Successor);
+        env.storage()
+            .instance()
+            .remove(&DataKey::SuccessorNomination);
+        Ok(())
+    }
+
+    pub fn get_successor_status(env: Env) -> SuccessorStatus {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Decommissioned)
+            .unwrap_or(false)
+        {
+            return SuccessorStatus {
+                state: SuccessorState::Decommissioned,
+                successor: Self::get_successor(env.clone()),
+                nominated_at_ledger: 0,
+                earliest_activation_ledger: 0,
+            };
+        }
+        match env
+            .storage()
+            .instance()
+            .get::<_, SuccessorNominationRecord>(&DataKey::SuccessorNomination)
+        {
+            Some(record) => {
+                let state = if env.ledger().sequence() >= record.earliest_activation_ledger {
+                    SuccessorState::Ready
+                } else {
+                    SuccessorState::Pending
+                };
+                SuccessorStatus {
+                    state,
+                    successor: Some(record.successor),
+                    nominated_at_ledger: record.nominated_at_ledger,
+                    earliest_activation_ledger: record.earliest_activation_ledger,
+                }
+            }
+            None => SuccessorStatus {
+                state: SuccessorState::Absent,
+                successor: None,
+                nominated_at_ledger: 0,
+                earliest_activation_ledger: 0,
+            },
+        }
+    }
+
     pub fn activate_successor(env: Env, proposal_id: BytesN<32>) -> Result<(), IssuerError> {
         Self::ensure_not_decommissioned(&env)?;
         let admin = Self::get_admin(env.clone()).map_err(|_| IssuerError::IssuerNotFound)?;
@@ -805,10 +893,23 @@ impl IssuerRegistryContract {
             .get(&DataKey::Successor)
             .ok_or(IssuerError::IssuerNotFound)?;
 
+        if let Some(record) = env
+            .storage()
+            .instance()
+            .get::<_, SuccessorNominationRecord>(&DataKey::SuccessorNomination)
+        {
+            if env.ledger().sequence() < record.earliest_activation_ledger {
+                return Err(IssuerError::InvalidTransition);
+            }
+        }
+
         Self::consume_proposal(&env, &proposal_id).map_err(|_| IssuerError::InvalidTransition)?;
         env.storage()
             .instance()
             .set(&DataKey::Decommissioned, &true);
+        env.storage()
+            .instance()
+            .remove(&DataKey::SuccessorNomination);
         ContractDecommissioned {
             proposal_id,
             old_instance: env.current_contract_address(),
@@ -1078,25 +1179,18 @@ impl IssuerRegistryContract {
                 .get::<_, SigningKeyCommitment>(&DataKey::ActiveSigningKey(issuer_id.clone()))
                 .map(|active| active.key_hash == key_hash && active.algorithm == algorithm)
                 .unwrap_or(false)
+            || env
+                .storage()
+                .persistent()
+                .has(&DataKey::CompromisedSigningKey(
+                    issuer_id.clone(),
+                    key_hash.clone(),
+                    algorithm,
+                ))
             || Self::stored_signing_key_state(
                 env.clone(),
                 issuer_id.clone(),
                 key_hash.clone(),
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::CompromisedSigningKey(
-                issuer_id.clone(),
-                key_hash.clone(),
-                algorithm,
-            ))
-        {
-            return Err(IssuerError::InvalidTransition);
-        }
-        env.storage().persistent().set(
-            &DataKey::PendingSigningKey(issuer_id),
-            &SigningKeyCommitment {
-                key_hash,
                 algorithm,
             )
             .map(|state| state.transition == SigningKeyLifecycleTransition::Compromised)
@@ -1263,8 +1357,6 @@ impl IssuerRegistryContract {
         Ok(record)
     }
 
-    /// Records a terminal compromise transition for a known key commitment.
-    /// No raw key material or free-form incident data is accepted.
     /// Permanently marks a known active, pending, or retired signing-key
     /// commitment as compromised. The immutable sidecar is deliberately
     /// separate from legacy signing-key records to preserve their encoding.
@@ -1273,75 +1365,6 @@ impl IssuerRegistryContract {
         issuer_id: BytesN<32>,
         key_hash: BytesN<32>,
         algorithm: u32,
-    ) -> Result<SigningKeyLifecycleRecord, IssuerError> {
-        Self::assert_operational(&env);
-        let admin = Self::get_admin(env.clone()).map_err(|_| IssuerError::IssuerNotFound)?;
-        Self::require_auth(&admin);
-        Self::get_issuer(env.clone(), issuer_id.clone())?;
-        if algorithm == 0 || Self::is_zero_hash(&env, &key_hash) {
-            return Err(IssuerError::InvalidMetadataCommitment);
-        }
-        if Self::stored_signing_key_state(
-            env.clone(),
-            issuer_id.clone(),
-            key_hash.clone(),
-            algorithm,
-        )
-        .map(|state| state.transition == SigningKeyLifecycleTransition::Compromised)
-        .unwrap_or(false)
-        {
-            return Err(IssuerError::InvalidTransition);
-        }
-
-        let pending_key = DataKey::PendingSigningKey(issuer_id.clone());
-        let active_key = DataKey::ActiveSigningKey(issuer_id.clone());
-        let pending_match = env
-            .storage()
-            .persistent()
-            .get::<_, SigningKeyCommitment>(&pending_key)
-            .map(|pending| pending.key_hash == key_hash && pending.algorithm == algorithm)
-            .unwrap_or(false);
-        let active_match = env
-            .storage()
-            .persistent()
-            .get::<_, SigningKeyCommitment>(&active_key)
-            .map(|active| active.key_hash == key_hash && active.algorithm == algorithm)
-            .unwrap_or(false);
-        let prior_match = Self::get_prior_issuer_signing_keys(env.clone(), issuer_id.clone())
-            .iter()
-            .any(|prior| prior.key_hash == key_hash && prior.algorithm == algorithm);
-        if !pending_match && !active_match && !prior_match {
-            return Err(IssuerError::InvalidTransition);
-        }
-        let sequence = Self::checked_signing_key_sequence(env.clone(), issuer_id.clone(), 1)?;
-        if pending_match {
-            env.storage().persistent().remove(&pending_key);
-        }
-        if active_match {
-            env.storage().persistent().remove(&active_key);
-        }
-        let record = Self::append_signing_key_transition(
-            env.clone(),
-            issuer_id.clone(),
-            key_hash,
-            algorithm,
-            SigningKeyLifecycleTransition::Compromised,
-            sequence,
-        );
-        Self::store_signing_key_sequence(env, issuer_id, sequence);
-        Ok(record)
-    }
-
-    pub fn get_signing_key_usage_sequence(env: Env, issuer_id: BytesN<32>) -> u64 {
-        let key = DataKey::SigningKeyUsageSequence(issuer_id);
-        let sequence = env.storage().persistent().get(&key).unwrap_or(0);
-        if env.storage().persistent().has(&key) {
-            Self::extend_issuer_key_ttl(env, &key);
-        }
-        sequence
-    }
-
-    pub fn get_issuer_signing_key_state(
         reason_hash: BytesN<32>,
     ) -> Result<CompromisedSigningKeyRecord, IssuerError> {
         Self::assert_operational(&env);
@@ -1357,6 +1380,17 @@ impl IssuerRegistryContract {
 
         let marker = DataKey::CompromisedSigningKey(issuer_id.clone(), key_hash.clone(), algorithm);
         if env.storage().persistent().has(&marker) {
+            return Err(IssuerError::InvalidTransition);
+        }
+        if Self::stored_signing_key_state(
+            env.clone(),
+            issuer_id.clone(),
+            key_hash.clone(),
+            algorithm,
+        )
+        .map(|state| state.transition == SigningKeyLifecycleTransition::Compromised)
+        .unwrap_or(false)
+        {
             return Err(IssuerError::InvalidTransition);
         }
 
@@ -1397,6 +1431,9 @@ impl IssuerRegistryContract {
             return Err(IssuerError::InvalidTransition);
         }
 
+        let lifecycle_sequence =
+            Self::checked_signing_key_sequence(env.clone(), issuer_id.clone(), 1)?;
+
         let sequence: u32 = env
             .storage()
             .persistent()
@@ -1408,7 +1445,7 @@ impl IssuerRegistryContract {
         let record = CompromisedSigningKeyRecord {
             record_version: 1,
             issuer_id_hash: issuer_id.clone(),
-            key_hash,
+            key_hash: key_hash.clone(),
             algorithm,
             effective_ledger: env.ledger().sequence(),
             reason_hash,
@@ -1416,7 +1453,7 @@ impl IssuerRegistryContract {
         };
 
         let history_key = DataKey::CompromisedSigningKeyHistory(issuer_id.clone(), sequence);
-        let count_key = DataKey::CompromisedSigningKeyCount(issuer_id);
+        let count_key = DataKey::CompromisedSigningKeyCount(issuer_id.clone());
         env.storage().persistent().set(&marker, &record);
         env.storage().persistent().set(&history_key, &record);
         env.storage().persistent().set(&count_key, &(sequence + 1));
@@ -1433,6 +1470,17 @@ impl IssuerRegistryContract {
         if pending_matches {
             env.storage().persistent().remove(&pending_key);
         }
+
+        Self::append_signing_key_transition(
+            env.clone(),
+            issuer_id.clone(),
+            key_hash,
+            algorithm,
+            SigningKeyLifecycleTransition::Compromised,
+            lifecycle_sequence,
+        );
+        Self::store_signing_key_sequence(env.clone(), issuer_id, lifecycle_sequence);
+
         IssuerSigningKeyCompromised {
             record: record.clone(),
             marked_by: admin,
@@ -1441,7 +1489,16 @@ impl IssuerRegistryContract {
         Ok(record)
     }
 
-    pub fn get_compromised_signing_key(
+    pub fn get_signing_key_usage_sequence(env: Env, issuer_id: BytesN<32>) -> u64 {
+        let key = DataKey::SigningKeyUsageSequence(issuer_id);
+        let sequence = env.storage().persistent().get(&key).unwrap_or(0);
+        if env.storage().persistent().has(&key) {
+            Self::extend_issuer_key_ttl(env, &key);
+        }
+        sequence
+    }
+
+    pub fn get_issuer_signing_key_state(
         env: Env,
         issuer_id: BytesN<32>,
         key_hash: BytesN<32>,
@@ -1483,6 +1540,15 @@ impl IssuerRegistryContract {
                 break;
             }
             sequence += 1;
+        }
+        Ok(records)
+    }
+
+    pub fn get_compromised_signing_key(
+        env: Env,
+        issuer_id: BytesN<32>,
+        key_hash: BytesN<32>,
+        algorithm: u32,
     ) -> Option<CompromisedSigningKeyRecord> {
         env.storage()
             .persistent()
@@ -1705,6 +1771,67 @@ impl IssuerRegistryContract {
             IssuerStatus::Suspended,
             reason_commitment,
         )
+    }
+
+    pub fn suspend_issuers(
+        env: Env,
+        issuer_id_hashes: Vec<BytesN<32>>,
+        incident_commitment: BytesN<32>,
+    ) -> Result<(), IssuerError> {
+        Self::assert_operational(&env);
+        if issuer_id_hashes.is_empty()
+            || issuer_id_hashes.len() > MAX_BULK_SUSPENSION_BATCH
+            || incident_commitment == BytesN::from_array(&env, &[0u8; 32])
+        {
+            return Err(IssuerError::InvalidTransition);
+        }
+        let admin = Self::get_admin(env.clone()).map_err(|_| IssuerError::IssuerNotFound)?;
+        Self::require_auth(&admin);
+
+        let mut records = Vec::new(&env);
+        for index in 0..issuer_id_hashes.len() {
+            let issuer_id_hash = issuer_id_hashes.get(index).unwrap();
+            for prior_index in 0..index {
+                if issuer_id_hashes.get(prior_index).unwrap() == issuer_id_hash {
+                    return Err(IssuerError::InvalidTransition);
+                }
+            }
+            let record: IssuerRecord = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Issuer(issuer_id_hash))
+                .ok_or(IssuerError::IssuerNotFound)?;
+            if record.status == IssuerStatus::Revoked {
+                return Err(IssuerError::IssuerRevoked);
+            }
+            if record.status == IssuerStatus::Suspended {
+                return Err(IssuerError::InvalidTransition);
+            }
+            records.push_back(record);
+        }
+
+        let now = env.ledger().timestamp();
+        let effective_ledger = env.ledger().sequence();
+        for index in 0..records.len() {
+            let mut record = records.get(index).unwrap();
+            record.status = IssuerStatus::Suspended;
+            record.reason_commitment = Some(incident_commitment.clone());
+            record.updated_at = now;
+            let key = DataKey::Issuer(record.issuer_id_hash.clone());
+            env.storage().persistent().set(&key, &record);
+            Self::extend_issuer_key_ttl(env.clone(), &key);
+            let epoch = Self::bump_epoch(&env);
+            IssuerSuspended {
+                issuer_id_hash: record.issuer_id_hash,
+                effective_ledger,
+                effective_timestamp: now,
+                reason_commitment: incident_commitment.clone(),
+                updated_at: now,
+                epoch,
+            }
+            .publish(&env);
+        }
+        Ok(())
     }
 
     pub fn reactivate_issuer(
@@ -2276,11 +2403,120 @@ impl IssuerRegistryContract {
         }
         status.cursor = next;
         status.complete = next == status.total_items;
+        let source_version = Self::get_contract_version(env.clone());
+        let target_version = status.target_contract_version;
+        let checksum = compute_migration_checkpoint_checksum(
+            &env,
+            source_version,
+            target_version,
+            expected_cursor,
+            next,
+            processed_items,
+            status.total_items,
+        );
+        let checkpoint = MigrationCheckpoint {
+            checkpoint_version: MIGRATION_CHECKPOINT_VERSION,
+            source_version,
+            target_version,
+            cursor_start: expected_cursor,
+            cursor_end: next,
+            processed_count: processed_items,
+            total_items: status.total_items,
+            checksum,
+        };
         env.storage()
             .instance()
             .set(&DataKey::MigrationStatus, &status);
+        env.storage()
+            .instance()
+            .set(&DataKey::MigrationCheckpoint, &checkpoint);
         Self::extend_instance_ttl(env);
         Ok(status)
+    }
+
+    pub fn get_migration_checkpoint(env: Env) -> Option<MigrationCheckpoint> {
+        env.storage().instance().get(&DataKey::MigrationCheckpoint)
+    }
+
+    pub fn resume_migration(
+        env: Env,
+        checkpoint: MigrationCheckpoint,
+    ) -> Result<MigrationStatus, ContractError> {
+        let admin = Self::get_admin(env.clone())?;
+        Self::require_auth(&admin);
+        if checkpoint.checkpoint_version != MIGRATION_CHECKPOINT_VERSION {
+            return Err(ContractError::InvalidInput);
+        }
+        let expected_checksum = compute_migration_checkpoint_checksum(
+            &env,
+            checkpoint.source_version,
+            checkpoint.target_version,
+            checkpoint.cursor_start,
+            checkpoint.cursor_end,
+            checkpoint.processed_count,
+            checkpoint.total_items,
+        );
+        if checkpoint.checksum != expected_checksum {
+            return Err(ContractError::InvalidInput);
+        }
+        let status = Self::get_migration_status(env.clone()).ok_or(ContractError::InvalidState)?;
+        if status.target_contract_version != checkpoint.target_version
+            || status.total_items != checkpoint.total_items
+            || status.cursor != checkpoint.cursor_end
+        {
+            return Err(ContractError::InvalidState);
+        }
+        if let Some(stored) = Self::get_migration_checkpoint(env.clone()) {
+            if stored != checkpoint {
+                return Err(ContractError::InvalidState);
+            }
+        }
+        Ok(status)
+    }
+
+    pub fn get_error_catalog_version(_env: Env) -> ErrorCatalogDescriptor {
+        ErrorCatalogDescriptor {
+            catalog_version: ERROR_CATALOG_VERSION,
+            min_code: ISSUER_REGISTRY_ERROR_MIN,
+            max_code: ISSUER_REGISTRY_ERROR_MAX,
+        }
+    }
+
+    pub fn get_capacity_envelope(env: Env) -> CapacityEnvelope {
+        let active_count = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveIssuerCount)
+            .unwrap_or(0u32);
+        CapacityEnvelope {
+            header: make_query_envelope_header(&env, 1),
+            active_count,
+            max_capacity: 10_000,
+        }
+    }
+
+    pub fn get_history_envelope(env: Env) -> HistoryEnvelope {
+        let total_records = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveIssuerCount)
+            .unwrap_or(0u32);
+        HistoryEnvelope {
+            header: make_query_envelope_header(&env, 1),
+            total_records,
+        }
+    }
+
+    pub fn get_checkpoint_envelope(env: Env) -> Result<CheckpointEnvelope, ContractError> {
+        let checkpoint = env
+            .storage()
+            .instance()
+            .get(&DataKey::MigrationCheckpoint)
+            .ok_or(ContractError::NotFound)?;
+        Ok(CheckpointEnvelope {
+            header: make_query_envelope_header(&env, 1),
+            checkpoint,
+        })
     }
 
     pub fn get_config_digest_version() -> u32 {
@@ -3006,13 +3242,10 @@ mod test {
 
     use super::{DataKey, IssuerRegistryContract, IssuerRegistryContractClient};
     use earnproof_shared::{
-        ContractError, GovernanceRole, GovernanceRoleState, IssuerError, IssuerQueryStatus,
-        IssuerStatus, IssuerStatusResult, MAX_ISSUER_STATUS_BATCH, TTL_THRESHOLD_LEDGERS,
-        AdminTransferState, ContractError, IssuerError, IssuerQueryStatus, IssuerStatus,
-        IssuerStatusResult, ADMIN_TRANSFER_EXPIRY_LEDGERS, MAX_ISSUER_STATUS_BATCH,
-        ContractError, IssuerError, IssuerQueryStatus, IssuerRevocationState, IssuerStatus,
-        IssuerStatusResult, ISSUER_REVOCATION_TOMBSTONE_VERSION, MAX_ISSUER_STATUS_BATCH,
-        TTL_THRESHOLD_LEDGERS,
+        AdminTransferState, ContractError, GovernanceRole, GovernanceRoleState, IssuerError,
+        IssuerQueryStatus, IssuerRevocationState, IssuerStatus, IssuerStatusResult,
+        ADMIN_TRANSFER_EXPIRY_LEDGERS, ISSUER_REVOCATION_TOMBSTONE_VERSION,
+        MAX_ISSUER_STATUS_BATCH, TTL_THRESHOLD_LEDGERS,
     };
     use soroban_sdk::{
         testutils::{
@@ -3310,6 +3543,7 @@ mod test {
             &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
         );
         client.suspend_issuer(
+            &bytes(&env, 0xa1),
             &suspended,
             &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
         );
@@ -3320,6 +3554,7 @@ mod test {
             &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
         );
         client.revoke_issuer(
+            &bytes(&env, 0xa2),
             &revoked,
             &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
         );
@@ -3494,7 +3729,7 @@ mod test {
         env.mock_all_auths();
         client.initialize(&admin);
         let hash = BytesN::from_array(&env, &[0xde; 32]);
-        client.approve_upgrade(&hash, &2);
+        client.approve_upgrade(&bytes(&env, 0x81), &hash, &2);
         env.ledger().set_sequence_number(
             env.ledger().sequence() + earnproof_shared::UPGRADE_TIMELOCK_LEDGERS,
         );
@@ -3508,7 +3743,7 @@ mod test {
         let (env, client, _admin) = setup();
         let hash = bytes(&env, 0x42);
 
-        client.approve_upgrade(&hash, &2);
+        client.approve_upgrade(&bytes(&env, 0x81), &hash, &2);
         env.ledger().set_sequence_number(
             env.ledger().sequence() + earnproof_shared::UPGRADE_TIMELOCK_LEDGERS,
         );
@@ -3523,7 +3758,7 @@ mod test {
         let (env, client, _admin) = setup();
         let hash = bytes(&env, 0x42);
 
-        client.approve_upgrade(&hash, &2);
+        client.approve_upgrade(&bytes(&env, 0x81), &hash, &2);
         env.ledger().set_sequence_number(
             env.ledger().sequence() + earnproof_shared::UPGRADE_TIMELOCK_LEDGERS,
         );
@@ -3548,7 +3783,7 @@ mod test {
         assert!(client.is_active_issuer(&issuer_id));
 
         let hash = bytes(&env, 0x77);
-        client.approve_upgrade(&hash, &2);
+        client.approve_upgrade(&bytes(&env, 0x81), &hash, &2);
         env.ledger().set_sequence_number(
             env.ledger().sequence() + earnproof_shared::UPGRADE_TIMELOCK_LEDGERS,
         );
@@ -3565,7 +3800,7 @@ mod test {
         let hash_v2 = bytes(&env, 0x01);
         let old_hash = bytes(&env, 0x02);
 
-        client.approve_upgrade(&hash_v2, &2);
+        client.approve_upgrade(&bytes(&env, 0x85), &hash_v2, &2);
         env.ledger().set_sequence_number(
             env.ledger().sequence() + earnproof_shared::UPGRADE_TIMELOCK_LEDGERS,
         );
@@ -3959,7 +4194,7 @@ mod test {
         let (env, client, _admin) = setup();
 
         // Valid: immediate next version
-        client.approve_upgrade(&bytes(&env, 1), &2);
+        client.approve_upgrade(&bytes(&env, 0x86), &bytes(&env, 1), &2);
         env.ledger().set_sequence_number(
             env.ledger().sequence() + earnproof_shared::UPGRADE_TIMELOCK_LEDGERS,
         );
@@ -3967,7 +4202,7 @@ mod test {
         assert_eq!(client.get_contract_version(), 2);
 
         // Valid: large version number
-        client.approve_upgrade(&bytes(&env, 2), &u32::MAX);
+        client.approve_upgrade(&bytes(&env, 0x87), &bytes(&env, 2), &u32::MAX);
         env.ledger().set_sequence_number(
             env.ledger().sequence() + earnproof_shared::UPGRADE_TIMELOCK_LEDGERS,
         );
@@ -4272,7 +4507,7 @@ mod test {
         );
 
         let wasm_hash = bytes(&env, 0xd1);
-        client.approve_upgrade(&wasm_hash, &2);
+        client.approve_upgrade(&bytes(&env, 0x88), &wasm_hash, &2);
         env.ledger().set_sequence_number(
             env.ledger().sequence() + earnproof_shared::UPGRADE_TIMELOCK_LEDGERS,
         );
@@ -4492,7 +4727,7 @@ mod test {
             &bytes(&env, 2),
             &bytes(&env, 99),
         );
-        client.revoke_issuer(&issuer_id, &bytes(&env, 98));
+        client.revoke_issuer(&bytes(&env, 0xb1), &issuer_id, &bytes(&env, 98));
         let result = client.try_set_issuer_metadata_commitment(
             &issuer_id,
             &bytes(&env, 0x11),
@@ -4558,7 +4793,7 @@ mod test {
             li.sequence_number = 900;
             li.timestamp = 9_000;
         });
-        client.suspend_issuer(&issuer_id, &bytes(&env, 98));
+        client.suspend_issuer(&bytes(&env, 0xb2), &issuer_id, &bytes(&env, 98));
         let record = client.get_issuer(&issuer_id);
         assert_eq!(record.status, IssuerStatus::Suspended);
         assert_eq!(record.status_effective_ledger, 900);
@@ -4576,27 +4811,26 @@ mod test {
             &bytes(&env, 2),
             &bytes(&env, 99),
         );
-        let reason = soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32]);
 
         env.ledger().with_mut(|li| {
             li.sequence_number = 10;
             li.timestamp = 100;
         });
-        client.suspend_issuer(&issuer_id, &bytes(&env, 98));
+        client.suspend_issuer(&bytes(&env, 0xb2), &issuer_id, &bytes(&env, 98));
         assert_eq!(client.get_issuer(&issuer_id).status_effective_ledger, 10);
 
         env.ledger().with_mut(|li| {
             li.sequence_number = 20;
             li.timestamp = 200;
         });
-        client.reactivate_issuer(&issuer_id, &bytes(&env, 98));
+        client.reactivate_issuer(&bytes(&env, 0xb3), &issuer_id, &bytes(&env, 98));
         assert_eq!(client.get_issuer(&issuer_id).status_effective_ledger, 20);
 
         env.ledger().with_mut(|li| {
             li.sequence_number = 30;
             li.timestamp = 300;
         });
-        client.revoke_issuer(&issuer_id, &bytes(&env, 98));
+        client.revoke_issuer(&bytes(&env, 0xb1), &issuer_id, &bytes(&env, 98));
         let record = client.get_issuer(&issuer_id);
         assert_eq!(record.status, IssuerStatus::Revoked);
         assert_eq!(record.status_effective_ledger, 30);
@@ -4618,7 +4852,7 @@ mod test {
             li.sequence_number = 40;
             li.timestamp = 400;
         });
-        client.revoke_issuer(&issuer_id, &bytes(&env, 98));
+        client.revoke_issuer(&bytes(&env, 0xb1), &issuer_id, &bytes(&env, 98));
         let before = client.get_issuer(&issuer_id);
 
         // A revoked issuer cannot be reactivated; the rejected call must not
@@ -4627,7 +4861,7 @@ mod test {
             li.sequence_number = 50;
             li.timestamp = 500;
         });
-        let result = client.try_reactivate_issuer(&issuer_id, &bytes(&env, 98));
+        let result = client.try_reactivate_issuer(&bytes(&env, 0xb4), &issuer_id, &bytes(&env, 98));
         assert_eq!(result, Err(Ok(IssuerError::InvalidTransition)));
         let after = client.get_issuer(&issuer_id);
         assert_eq!(
@@ -5179,10 +5413,11 @@ mod upgrade_timelock_tests {
     #[test]
     fn test_revoke_removes_approval() {
         let (env, client, _) = setup();
+        let proposal = BytesN::from_array(&env, &[0x90u8; 32]);
 
-        client.approve_upgrade(&make_wasm_hash(&env), &2);
+        client.approve_upgrade(&proposal, &make_wasm_hash(&env), &2);
 
-        client.revoke_upgrade_approval();
+        client.revoke_upgrade_approval(&proposal);
 
         env.as_contract(&client.address, || {
             let approval: Option<UpgradeApproval> =
@@ -5194,32 +5429,35 @@ mod upgrade_timelock_tests {
     #[test]
     fn test_revoke_before_timelock_succeeds() {
         let (env, client, _) = setup();
+        let proposal = BytesN::from_array(&env, &[0x90u8; 32]);
 
-        client.approve_upgrade(&make_wasm_hash(&env), &2);
+        client.approve_upgrade(&proposal, &make_wasm_hash(&env), &2);
 
         // Revoke immediately (before timelock)
-        assert!(client.try_revoke_upgrade_approval().is_ok());
+        assert!(client.try_revoke_upgrade_approval(&proposal).is_ok());
     }
 
     #[test]
     fn test_revoke_after_expiry_succeeds_cleanup() {
         let (env, client, _) = setup();
+        let proposal = BytesN::from_array(&env, &[0x90u8; 32]);
 
-        client.approve_upgrade(&make_wasm_hash(&env), &2);
+        client.approve_upgrade(&proposal, &make_wasm_hash(&env), &2);
 
         env.ledger()
             .set_sequence_number(env.ledger().sequence() + UPGRADE_APPROVAL_EXPIRY_LEDGERS + 1);
 
         // Revoke should succeed even on expired approval (cleanup)
-        assert!(client.try_revoke_upgrade_approval().is_ok());
+        assert!(client.try_revoke_upgrade_approval(&proposal).is_ok());
     }
 
     #[test]
     fn test_revoke_idempotent_when_no_approval() {
-        let (_env, client, _) = setup();
+        let (env, client, _) = setup();
+        let proposal = BytesN::from_array(&env, &[0x90u8; 32]);
 
         // Revoke with no approval — should not panic
-        assert!(client.try_revoke_upgrade_approval().is_ok());
+        assert!(client.try_revoke_upgrade_approval(&proposal).is_ok());
     }
 
     // ── SUITE 5: Overflow boundary ─────────────────────────────
@@ -5358,7 +5596,7 @@ mod upgrade_timelock_tests {
         );
         env.set_auths(&[]);
 
-        let result = client.try_revoke_upgrade_approval();
+        let result = client.try_revoke_upgrade_approval(&make_wasm_hash(&env));
 
         assert!(result.is_err(), "Non-admin must not revoke");
     }

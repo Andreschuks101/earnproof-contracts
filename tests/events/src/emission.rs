@@ -191,6 +191,7 @@ fn suspend_issuer_emits_issuer_suspended_once_and_matches_storage() {
     let deployment = Deployment::new();
     let events = deployment.capture(|| {
         deployment.issuers.suspend_issuer(
+            &hash(&deployment.env, 0x81),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )
@@ -208,11 +209,13 @@ fn suspend_issuer_emits_issuer_suspended_once_and_matches_storage() {
 fn reactivate_issuer_emits_issuer_reactivated_once_and_matches_storage() {
     let deployment = Deployment::new();
     deployment.issuers.suspend_issuer(
+        &hash(&deployment.env, 0x81),
         &deployment.issuer_id,
         &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
     );
     let events = deployment.capture(|| {
         deployment.issuers.reactivate_issuer(
+            &hash(&deployment.env, 0x82),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )
@@ -231,6 +234,7 @@ fn revoke_issuer_emits_issuer_revoked_once_and_matches_storage() {
     let deployment = Deployment::new();
     let events = deployment.capture(|| {
         deployment.issuers.revoke_issuer(
+            &hash(&deployment.env, 0x83),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )
@@ -382,7 +386,9 @@ fn a_rejected_registration_publishes_no_event_and_does_not_advance_the_epoch() {
 #[test]
 fn each_successful_proof_mutation_emits_one_proof_registry_event() {
     let deployment = Deployment::new();
-    let registration_events = deployment.capture(|| deployment.register_proof(0x23));
+    let registration_events = deployment.capture(|| {
+        deployment.register_proof(0x23);
+    });
     let proof_events: std::vec::Vec<_> = registration_events
         .iter()
         .filter(|event| event.contract == deployment.proofs.address)

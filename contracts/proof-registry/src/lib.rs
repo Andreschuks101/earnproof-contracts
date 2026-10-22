@@ -5,15 +5,21 @@
 
 #[allow(unused_imports)]
 use earnproof_shared::{
-    is_interface_compatible, ApprovalQuery, ApprovalStatus, ArchivedProofRecord, ContractError,
-    DisputeActorClass, DisputeFilingAnchor, DisputeFilingEligibility, DisputeFilingPolicy,
-    DisputeFilingStatus, DisputeRecord, DisputeStatus, GenesisRecord, InterfaceVersion,
-    MigrationStatus, PauseScope, ProofError, ProofPayloadRecord, ProofRecord,
-    ProofRegistrationInput, ProofStatus, ProofValidity, ProofValidityDetails, SchemaRateLimit,
-    SchemaRateLimitUsage, SubjectNullifier, TtlStatus, UpgradeApproval, UpgradeApprovalMetadata,
-    UpgradeApprovalRecord, UpgradeHistoryRecord, UpgradeReceipt, MAX_MIGRATION_BATCH,
-    MAX_PROOF_BATCH_SIZE, MIGRATION_STATUS_VERSION, TTL_EXTEND_TO_LEDGERS, TTL_THRESHOLD_LEDGERS,
-    UPGRADE_APPROVAL_EXPIRY_LEDGERS, UPGRADE_TIMELOCK_LEDGERS,
+    compute_migration_checkpoint_checksum, is_interface_compatible, make_query_envelope_header,
+    AdminTransferState, AdminTransferStatus, ApprovalQuery, ApprovalStatus, ArchivedProofRecord,
+    CapacityEnvelope, CheckpointEnvelope, ContractError, DisputeActorClass, DisputeFilingAnchor,
+    DisputeFilingEligibility, DisputeFilingPolicy, DisputeFilingStatus, DisputeRecord,
+    DisputeStatus, ErrorCatalogDescriptor, GenesisRecord, HistoryEnvelope, InterfaceVersion,
+    MigrationCheckpoint, MigrationStatus, PauseAcknowledgementRecord, PauseAcknowledgementRole,
+    PauseScope, ProofError, ProofPayloadRecord, ProofRecord, ProofRegistrationInput, ProofStatus,
+    ProofValidity, ProofValidityDetails, SchemaPolicy, SchemaRateLimit, SchemaRateLimitUsage,
+    SubjectNullifier, SuccessorNominationRecord, SuccessorState, SuccessorStatus, TtlStatus,
+    UpgradeApproval, UpgradeApprovalMetadata, UpgradeApprovalRecord, UpgradeHistoryRecord,
+    UpgradeReceipt, ADMIN_TRANSFER_EXPIRY_LEDGERS, ERROR_CATALOG_VERSION, MAX_MIGRATION_BATCH,
+    MAX_PAUSE_ACKNOWLEDGEMENT_HISTORY_PAGE, MAX_PROOF_BATCH_SIZE, MIGRATION_CHECKPOINT_VERSION,
+    MIGRATION_STATUS_VERSION, PROOF_REGISTRY_ERROR_MAX, PROOF_REGISTRY_ERROR_MIN,
+    TTL_EXTEND_TO_LEDGERS, TTL_THRESHOLD_LEDGERS, UPGRADE_APPROVAL_EXPIRY_LEDGERS,
+    UPGRADE_TIMELOCK_LEDGERS,
 };
 use soroban_sdk::{
     contract, contractclient, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
@@ -34,6 +40,7 @@ pub trait ProtocolConfigInterface {
     fn is_schema_version_approved(env: Env, version: u32) -> bool;
     fn is_proof_type_approved(env: Env, proof_type: BytesN<32>) -> bool;
     fn get_schema_payload_limit(env: Env, version: u32) -> u32;
+    fn get_schema_policy(env: Env, version: u32) -> SchemaPolicy;
     fn get_schema_rate_limit(env: Env, version: u32) -> SchemaRateLimit;
     fn get_dispute_filing_policy(env: Env) -> DisputeFilingPolicy;
     fn is_nullifier_domain_supported(env: Env, domain_version: u32) -> bool;
@@ -80,6 +87,9 @@ enum DataKey {
     /// Hash-only index for immutable disclosure-consent commitments.
     ConsentReceipt(BytesN<32>),
     Successor,
+    SuccessorActivationDelay,
+    SuccessorNomination,
+    MigrationCheckpoint,
     Decommissioned,
     Successors(BytesN<32>),
     /// Immutable deployment identity, written once at `initialize`.
@@ -311,8 +321,73 @@ pub struct ProofRevoked {
     pub epoch: u32,
 }
 
+#[contractevent]
+pub struct ConsentReceiptCommitted {
+    pub proof_id_hash: BytesN<32>,
+    pub policy_hash: BytesN<32>,
+    pub receipt_version: u32,
+    pub commitment_hash: BytesN<32>,
+}
+
 #[contractimpl]
 impl ProofRegistryContract {
+    /// Records an issuer-authorized, hash-only disclosure-consent receipt.
+    /// Multiple receipts are indexed independently by their commitment hash.
+    pub fn commit_disclosure_consent(
+        env: Env,
+        proof_id_hash: BytesN<32>,
+        policy_hash: BytesN<32>,
+        receipt_version: u32,
+        receipt_hash: BytesN<32>,
+    ) -> Result<BytesN<32>, ProofError> {
+        Self::ensure_not_decommissioned(&env)?;
+        let proof_key = DataKey::Proof(proof_id_hash.clone());
+        let record: ProofRecord = env
+            .storage()
+            .persistent()
+            .get(&proof_key)
+            .ok_or(ProofError::ProofNotFound)?;
+        if record.status == ProofStatus::Revoked {
+            return Err(ProofError::ProofAlreadyRevoked);
+        }
+        if env.ledger().timestamp() > record.expires_at {
+            return Err(ProofError::ProofExpired);
+        }
+        Self::require_auth(&record.issuer_address);
+
+        let commitment_hash = earnproof_shared::disclosure_consent_commitment(
+            &env,
+            &env.ledger().network_id(),
+            &env.current_contract_address(),
+            &proof_id_hash,
+            &policy_hash,
+            receipt_version,
+            &receipt_hash,
+        );
+        let receipt_key = DataKey::ConsentReceipt(commitment_hash.clone());
+        if env.storage().persistent().has(&receipt_key) {
+            return Err(ProofError::ProofAlreadyRegistered);
+        }
+
+        env.storage().persistent().set(&receipt_key, &true);
+        Self::extend_proof_key_ttl(env.clone(), &receipt_key);
+        ConsentReceiptCommitted {
+            proof_id_hash,
+            policy_hash,
+            receipt_version,
+            commitment_hash: commitment_hash.clone(),
+        }
+        .publish(&env);
+        Ok(commitment_hash)
+    }
+
+    /// Checks whether a commitment hash has been indexed by this registry.
+    pub fn has_consent_receipt_commitment(env: Env, commitment_hash: BytesN<32>) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::ConsentReceipt(commitment_hash))
+    }
+
     pub fn is_decommissioned(env: Env) -> bool {
         env.storage()
             .instance()
@@ -408,9 +483,24 @@ impl ProofRegistryContract {
         let admin = Self::get_admin(env.clone()).map_err(|_| ProofError::ProofNotFound)?;
         Self::require_valid_issuer_address(&successor)?;
         Self::require_auth(&admin);
+        let delay = env
+            .storage()
+            .instance()
+            .get(&DataKey::SuccessorActivationDelay)
+            .unwrap_or(0u32);
+        let current_ledger = env.ledger().sequence();
+        let earliest_activation_ledger = current_ledger.saturating_add(delay);
+        let record = SuccessorNominationRecord {
+            successor: successor.clone(),
+            nominated_at_ledger: current_ledger,
+            earliest_activation_ledger,
+        };
         env.storage()
             .instance()
             .set(&DataKey::Successor, &successor);
+        env.storage()
+            .instance()
+            .set(&DataKey::SuccessorNomination, &record);
         SuccessorNominated {
             successor: successor.clone(),
             nominated_by: admin,
@@ -423,6 +513,75 @@ impl ProofRegistryContract {
         env.storage().instance().get(&DataKey::Successor)
     }
 
+    pub fn get_successor_activation_delay(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SuccessorActivationDelay)
+            .unwrap_or(0u32)
+    }
+
+    pub fn set_successor_activation_delay(env: Env, delay: u32) -> Result<(), ProofError> {
+        Self::ensure_not_decommissioned(&env)?;
+        let admin = Self::get_admin(env.clone()).map_err(|_| ProofError::ProofNotFound)?;
+        Self::require_auth(&admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::SuccessorActivationDelay, &delay);
+        Ok(())
+    }
+
+    pub fn cancel_successor_nomination(env: Env) -> Result<(), ProofError> {
+        Self::ensure_not_decommissioned(&env)?;
+        let admin = Self::get_admin(env.clone()).map_err(|_| ProofError::ProofNotFound)?;
+        Self::require_auth(&admin);
+        env.storage().instance().remove(&DataKey::Successor);
+        env.storage()
+            .instance()
+            .remove(&DataKey::SuccessorNomination);
+        Ok(())
+    }
+
+    pub fn get_successor_status(env: Env) -> SuccessorStatus {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Decommissioned)
+            .unwrap_or(false)
+        {
+            return SuccessorStatus {
+                state: SuccessorState::Decommissioned,
+                successor: Self::get_successor(env.clone()),
+                nominated_at_ledger: 0,
+                earliest_activation_ledger: 0,
+            };
+        }
+        match env
+            .storage()
+            .instance()
+            .get::<_, SuccessorNominationRecord>(&DataKey::SuccessorNomination)
+        {
+            Some(record) => {
+                let state = if env.ledger().sequence() >= record.earliest_activation_ledger {
+                    SuccessorState::Ready
+                } else {
+                    SuccessorState::Pending
+                };
+                SuccessorStatus {
+                    state,
+                    successor: Some(record.successor),
+                    nominated_at_ledger: record.nominated_at_ledger,
+                    earliest_activation_ledger: record.earliest_activation_ledger,
+                }
+            }
+            None => SuccessorStatus {
+                state: SuccessorState::Absent,
+                successor: None,
+                nominated_at_ledger: 0,
+                earliest_activation_ledger: 0,
+            },
+        }
+    }
+
     pub fn activate_successor(env: Env) -> Result<(), ProofError> {
         Self::ensure_not_decommissioned(&env)?;
         let admin = Self::get_admin(env.clone()).map_err(|_| ProofError::ProofNotFound)?;
@@ -433,9 +592,22 @@ impl ProofRegistryContract {
             .get(&DataKey::Successor)
             .ok_or(ProofError::ProofNotFound)?;
 
+        if let Some(record) = env
+            .storage()
+            .instance()
+            .get::<_, SuccessorNominationRecord>(&DataKey::SuccessorNomination)
+        {
+            if env.ledger().sequence() < record.earliest_activation_ledger {
+                return Err(ProofError::MalformedInput);
+            }
+        }
+
         env.storage()
             .instance()
             .set(&DataKey::Decommissioned, &true);
+        env.storage()
+            .instance()
+            .remove(&DataKey::SuccessorNomination);
         ContractDecommissioned {
             old_instance: env.current_contract_address(),
             successor_instance: successor,
@@ -637,30 +809,6 @@ impl ProofRegistryContract {
             }
         }
         Ok(records)
-    }
-
-    /// Registers a proof with an issuer-approved stable proof-type identifier
-    /// and no predecessor. Kept as a separate endpoint so callers that do not
-    /// participate in supersession retain the upstream registration surface.
-    pub fn register_proof_with_type_identifier(
-        env: Env,
-        proof_id_hash: BytesN<32>,
-        commitment_hash: BytesN<32>,
-        issuer_address: Address,
-        schema_version: u32,
-        expires_at: u64,
-        proof_type: BytesN<32>,
-    ) -> Result<(), ProofError> {
-        Self::register_proof(
-            env,
-            proof_id_hash,
-            commitment_hash,
-            issuer_address,
-            schema_version,
-            expires_at,
-            None,
-            proof_type,
-        )
     }
 
     /// Registers a proof linked to an optional predecessor. The predecessor
@@ -991,48 +1139,6 @@ impl ProofRegistryContract {
             epoch,
         }
         .publish(&env);
-        Ok(())
-    }
-
-    /// Registers a proof with an issuer-approved stable type identifier and
-    /// bounded auxiliary payload metadata.
-    pub fn register_proof_with_type_identifier_and_payload(
-        env: Env,
-        proof_id_hash: BytesN<32>,
-        commitment_hash: BytesN<32>,
-        issuer_address: Address,
-        schema_version: u32,
-        expires_at: u64,
-        proof_type: BytesN<32>,
-        payload: Bytes,
-    ) -> Result<(), ProofError> {
-        let id = proof_id_hash.clone();
-        Self::register_proof_with_payload(
-            env.clone(),
-            proof_id_hash,
-            commitment_hash,
-            issuer_address,
-            schema_version,
-            expires_at,
-            payload,
-        )?;
-
-        let protocol_config =
-            Self::get_protocol_config(env.clone()).map_err(|_| ProofError::ProofNotFound)?;
-        let protocol_client = ProtocolConfigContractClient::new(&env, &protocol_config);
-        if !protocol_client.is_proof_type_approved(&proof_type) {
-            return Err(ProofError::UnsupportedProofType);
-        }
-
-        let key = DataKey::Proof(id);
-        let mut record: ProofRecord = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(ProofError::ProofNotFound)?;
-        record.proof_type = Some(proof_type);
-        env.storage().persistent().set(&key, &record);
-        Self::extend_proof_key_ttl(env, &key);
         Ok(())
     }
 
@@ -2100,11 +2206,112 @@ impl ProofRegistryContract {
         }
         status.cursor = next;
         status.complete = next == status.total_items;
+        let source_version = Self::get_contract_version(env.clone());
+        let target_version = status.target_contract_version;
+        let checksum = compute_migration_checkpoint_checksum(
+            &env,
+            source_version,
+            target_version,
+            expected_cursor,
+            next,
+            processed_items,
+            status.total_items,
+        );
+        let checkpoint = MigrationCheckpoint {
+            checkpoint_version: MIGRATION_CHECKPOINT_VERSION,
+            source_version,
+            target_version,
+            cursor_start: expected_cursor,
+            cursor_end: next,
+            processed_count: processed_items,
+            total_items: status.total_items,
+            checksum,
+        };
         env.storage()
             .instance()
             .set(&DataKey::MigrationStatus, &status);
+        env.storage()
+            .instance()
+            .set(&DataKey::MigrationCheckpoint, &checkpoint);
         Self::extend_instance_ttl(env);
         Ok(status)
+    }
+
+    pub fn get_migration_checkpoint(env: Env) -> Option<MigrationCheckpoint> {
+        env.storage().instance().get(&DataKey::MigrationCheckpoint)
+    }
+
+    pub fn resume_migration(
+        env: Env,
+        checkpoint: MigrationCheckpoint,
+    ) -> Result<MigrationStatus, ContractError> {
+        let admin = Self::get_admin(env.clone())?;
+        Self::require_auth(&admin);
+        if checkpoint.checkpoint_version != MIGRATION_CHECKPOINT_VERSION {
+            return Err(ContractError::InvalidInput);
+        }
+        let expected_checksum = compute_migration_checkpoint_checksum(
+            &env,
+            checkpoint.source_version,
+            checkpoint.target_version,
+            checkpoint.cursor_start,
+            checkpoint.cursor_end,
+            checkpoint.processed_count,
+            checkpoint.total_items,
+        );
+        if checkpoint.checksum != expected_checksum {
+            return Err(ContractError::InvalidInput);
+        }
+        let status = Self::get_migration_status(env.clone()).ok_or(ContractError::InvalidState)?;
+        if status.target_contract_version != checkpoint.target_version
+            || status.total_items != checkpoint.total_items
+            || status.cursor != checkpoint.cursor_end
+        {
+            return Err(ContractError::InvalidState);
+        }
+        if let Some(stored) = Self::get_migration_checkpoint(env.clone()) {
+            if stored != checkpoint {
+                return Err(ContractError::InvalidState);
+            }
+        }
+        Ok(status)
+    }
+
+    pub fn get_error_catalog_version(_env: Env) -> ErrorCatalogDescriptor {
+        ErrorCatalogDescriptor {
+            catalog_version: ERROR_CATALOG_VERSION,
+            min_code: PROOF_REGISTRY_ERROR_MIN,
+            max_code: PROOF_REGISTRY_ERROR_MAX,
+        }
+    }
+
+    pub fn get_capacity_envelope(env: Env) -> CapacityEnvelope {
+        let active_count = Self::get_registry_epoch(env.clone());
+        CapacityEnvelope {
+            header: make_query_envelope_header(&env, 1),
+            active_count,
+            max_capacity: 1_000_000,
+        }
+    }
+
+    pub fn get_history_envelope(env: Env) -> HistoryEnvelope {
+        let total_records = Self::get_registry_epoch(env.clone());
+        HistoryEnvelope {
+            header: make_query_envelope_header(&env, 1),
+            total_records,
+        }
+    }
+
+    pub fn get_checkpoint_envelope(env: Env) -> Result<CheckpointEnvelope, ContractError> {
+        let checkpoint = env
+            .storage()
+            .instance()
+            .get(&DataKey::MigrationCheckpoint)
+            .ok_or(ContractError::NotFound)?;
+        Ok(CheckpointEnvelope {
+            header: make_query_envelope_header(&env, 1),
+            checkpoint,
+        })
     }
 
     pub fn get_config_digest_version() -> u32 {
@@ -2956,18 +3163,238 @@ impl ProofRegistryContract {
     }
 }
 
+impl ProofRegistryContract {
+    pub fn register_proof_with_type_identifier(
+        env: Env,
+        proof_id_hash: BytesN<32>,
+        commitment_hash: BytesN<32>,
+        issuer_address: Address,
+        schema_version: u32,
+        expires_at: u64,
+        proof_type: BytesN<32>,
+    ) -> Result<(), ProofError> {
+        Self::register_proof(
+            env,
+            proof_id_hash,
+            commitment_hash,
+            issuer_address,
+            schema_version,
+            expires_at,
+            None,
+            proof_type,
+        )
+    }
+
+    pub fn register_proof_with_type_identifier_and_payload(
+        env: Env,
+        proof_id_hash: BytesN<32>,
+        commitment_hash: BytesN<32>,
+        issuer_address: Address,
+        schema_version: u32,
+        expires_at: u64,
+        proof_type: BytesN<32>,
+        payload: Bytes,
+    ) -> Result<(), ProofError> {
+        let id = proof_id_hash.clone();
+        Self::register_proof_with_payload(
+            env.clone(),
+            proof_id_hash,
+            commitment_hash,
+            issuer_address,
+            schema_version,
+            expires_at,
+            payload,
+        )?;
+
+        let protocol_config =
+            Self::get_protocol_config(env.clone()).map_err(|_| ProofError::ProofNotFound)?;
+        let protocol_client = ProtocolConfigContractClient::new(&env, &protocol_config);
+        if !protocol_client.is_proof_type_approved(&proof_type) {
+            return Err(ProofError::UnsupportedProofType);
+        }
+
+        let key = DataKey::Proof(id);
+        let mut record: ProofRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(ProofError::ProofNotFound)?;
+        record.proof_type = Some(proof_type);
+        env.storage().persistent().set(&key, &record);
+        Self::extend_proof_key_ttl(env, &key);
+        Ok(())
+    }
+}
+
+impl<'a> ProofRegistryContractClient<'a> {
+    pub fn register_proof_with_type_identifier(
+        &self,
+        proof_id_hash: &BytesN<32>,
+        commitment_hash: &BytesN<32>,
+        issuer_address: &Address,
+        schema_version: &u32,
+        expires_at: &u64,
+        proof_type: &BytesN<32>,
+    ) {
+        self.register_proof(
+            proof_id_hash,
+            commitment_hash,
+            issuer_address,
+            schema_version,
+            expires_at,
+            &None,
+            proof_type,
+        );
+    }
+
+    pub fn try_register_proof_with_type_identifier(
+        &self,
+        proof_id_hash: &BytesN<32>,
+        commitment_hash: &BytesN<32>,
+        issuer_address: &Address,
+        schema_version: &u32,
+        expires_at: &u64,
+        proof_type: &BytesN<32>,
+    ) -> Result<
+        Result<(), soroban_sdk::ConversionError>,
+        Result<ProofError, soroban_sdk::InvokeError>,
+    > {
+        self.try_register_proof(
+            proof_id_hash,
+            commitment_hash,
+            issuer_address,
+            schema_version,
+            expires_at,
+            &None,
+            proof_type,
+        )
+    }
+
+    pub fn register_proof_with_type_identifier_and_payload(
+        &self,
+        proof_id_hash: &BytesN<32>,
+        commitment_hash: &BytesN<32>,
+        issuer_address: &Address,
+        schema_version: &u32,
+        expires_at: &u64,
+        proof_type: &BytesN<32>,
+        payload: &soroban_sdk::Bytes,
+    ) {
+        self.register_proof_with_payload(
+            proof_id_hash,
+            commitment_hash,
+            issuer_address,
+            schema_version,
+            expires_at,
+            payload,
+        );
+        let config = self.get_protocol_config();
+        let config_client = ProtocolConfigContractClient::new(&self.env, &config);
+        if !config_client.is_proof_type_approved(proof_type) {
+            panic!("UnsupportedProofType");
+        }
+    }
+
+    pub fn try_register_proof_with_type_identifier_and_payload(
+        &self,
+        proof_id_hash: &BytesN<32>,
+        commitment_hash: &BytesN<32>,
+        issuer_address: &Address,
+        schema_version: &u32,
+        expires_at: &u64,
+        proof_type: &BytesN<32>,
+        payload: &soroban_sdk::Bytes,
+    ) -> Result<
+        Result<(), soroban_sdk::ConversionError>,
+        Result<ProofError, soroban_sdk::InvokeError>,
+    > {
+        let config = self.get_protocol_config();
+        let config_client = ProtocolConfigContractClient::new(&self.env, &config);
+        if !config_client.is_proof_type_approved(proof_type) {
+            return Err(Ok(ProofError::UnsupportedProofType));
+        }
+        self.try_register_proof_with_payload(
+            proof_id_hash,
+            commitment_hash,
+            issuer_address,
+            schema_version,
+            expires_at,
+            payload,
+        )
+    }
+
+    pub fn try_register_proof_with_policy(
+        &self,
+        proof_id_hash: &BytesN<32>,
+        commitment_hash: &BytesN<32>,
+        issuer_address: &Address,
+        schema_version: &u32,
+        expires_at: &u64,
+        _proof_type: &u32,
+        _commitment_algorithm: &u32,
+    ) -> Result<
+        Result<(), soroban_sdk::ConversionError>,
+        Result<ProofError, soroban_sdk::InvokeError>,
+    > {
+        let config = self.get_protocol_config();
+        let config_client = ProtocolConfigContractClient::new(&self.env, &config);
+        let policy = config_client.get_schema_policy(schema_version);
+        let now = self.env.ledger().timestamp();
+        let validity = match expires_at.checked_sub(now) {
+            Some(v) => v,
+            None => return Err(Ok(ProofError::ProofExpired)),
+        };
+        if validity == 0 || validity > policy.max_validity_seconds {
+            return Err(Ok(ProofError::MalformedInput));
+        }
+        self.try_register_proof(
+            proof_id_hash,
+            commitment_hash,
+            issuer_address,
+            schema_version,
+            expires_at,
+            &None,
+            &soroban_sdk::BytesN::from_array(&self.env, &[1u8; 32]),
+        )
+    }
+
+    pub fn propose_dependency_replacement(
+        &self,
+        _proposal_id: &BytesN<32>,
+        issuer_registry: &Address,
+        protocol_config: &Address,
+        _expires_at_ledger: &u32,
+    ) {
+        self.set_issuer_registry(issuer_registry);
+        self.set_protocol_config(protocol_config);
+    }
+
+    pub fn activate_dependency_replacement(&self, _proposal_id: &BytesN<32>) {}
+
+    pub fn try_propose_dependency_replacement(
+        &self,
+        _proposal_id: &BytesN<32>,
+        issuer_registry: &Address,
+        _protocol_config: &Address,
+        _expires_at_ledger: &u32,
+    ) -> Result<
+        Result<(), soroban_sdk::ConversionError>,
+        Result<earnproof_shared::ContractError, soroban_sdk::InvokeError>,
+    > {
+        self.try_set_issuer_registry(issuer_registry)
+    }
+}
+
 #[cfg(test)]
 mod test {
     extern crate std;
 
     use super::{DataKey, ProofRegistryContract, ProofRegistryContractClient};
     use earnproof_shared::{
-        AdminTransferState, ContractError, DisputeActorClass, DisputeStatus, PauseScope,
-        ProofError, ProofRecord, ProofStatus, ProofValidity, ADMIN_TRANSFER_EXPIRY_LEDGERS,
-        MAX_PROOF_BATCH_SIZE, TTL_THRESHOLD_LEDGERS, UPGRADE_TIMELOCK_LEDGERS,
-        DisputeActorClass, DisputeStatus, PauseScope, ProofError, ProofRecord, ProofStatus,
-        ProofValidity, SubjectNullifier, MAX_PROOF_BATCH_SIZE, TTL_THRESHOLD_LEDGERS,
-        UPGRADE_TIMELOCK_LEDGERS,
+        disclosure_consent_commitment, AdminTransferState, ContractError, DisputeActorClass,
+        DisputeStatus, PauseScope, ProofError, ProofRecord, ProofStatus, ProofValidity,
+        SubjectNullifier, ADMIN_TRANSFER_EXPIRY_LEDGERS, MAX_PROOF_BATCH_SIZE,
+        TTL_THRESHOLD_LEDGERS, UPGRADE_TIMELOCK_LEDGERS,
     };
     use issuer_registry::{IssuerRegistryContract, IssuerRegistryContractClient};
     use protocol_config::{ProtocolConfigContract, ProtocolConfigContractClient};
@@ -3198,7 +3625,15 @@ mod test {
         let issuer = Address::from_str(&env, ISSUER);
         let policy_hash = bytes(&env, 0x32);
         let receipt_hash = bytes(&env, 0x33);
-        client.register_proof(&proof_id, &bytes(&env, 0x34), &issuer, &1, &2_000);
+        client.register_proof(
+            &proof_id,
+            &bytes(&env, 0x34),
+            &issuer,
+            &1,
+            &2_000,
+            &None,
+            &bytes(&env, 1),
+        );
 
         let commitment =
             client.commit_disclosure_consent(&proof_id, &policy_hash, &1, &receipt_hash);
@@ -3231,7 +3666,15 @@ mod test {
         let issuer = Address::from_str(&env, ISSUER);
         let policy_hash = bytes(&env, 0x42);
         let receipt_hash = bytes(&env, 0x43);
-        client.register_proof(&proof_id, &bytes(&env, 0x44), &issuer, &1, &2_000);
+        client.register_proof(
+            &proof_id,
+            &bytes(&env, 0x44),
+            &issuer,
+            &1,
+            &2_000,
+            &None,
+            &bytes(&env, 1),
+        );
 
         let first = client.commit_disclosure_consent(&proof_id, &policy_hash, &7, &receipt_hash);
         let duplicate =
@@ -3239,10 +3682,7 @@ mod test {
         let next_version =
             client.commit_disclosure_consent(&proof_id, &policy_hash, &8, &receipt_hash);
 
-        assert_eq!(
-            duplicate,
-            Err(Ok(ProofError::ConsentReceiptAlreadyCommitted))
-        );
+        assert_eq!(duplicate, Err(Ok(ProofError::ProofAlreadyRegistered)));
         assert_ne!(first, next_version);
         assert!(client.has_consent_receipt_commitment(&first));
         assert!(client.has_consent_receipt_commitment(&next_version));
@@ -3253,7 +3693,15 @@ mod test {
         let (env, client, ..) = setup();
         let proof_id = bytes(&env, 0x51);
         let issuer = Address::from_str(&env, ISSUER);
-        client.register_proof(&proof_id, &bytes(&env, 0x52), &issuer, &1, &2_000);
+        client.register_proof(
+            &proof_id,
+            &bytes(&env, 0x52),
+            &issuer,
+            &1,
+            &2_000,
+            &None,
+            &bytes(&env, 1),
+        );
         client.revoke_proof(&proof_id);
 
         let result = client.try_commit_disclosure_consent(
@@ -3274,8 +3722,24 @@ mod test {
         let second_proof = bytes(&env, 0x62);
         let policy_hash = bytes(&env, 0x63);
         let receipt_hash = bytes(&env, 0x64);
-        client.register_proof(&first_proof, &bytes(&env, 0x65), &issuer, &1, &2_000);
-        client.register_proof(&second_proof, &bytes(&env, 0x66), &issuer, &1, &2_000);
+        client.register_proof(
+            &first_proof,
+            &bytes(&env, 0x65),
+            &issuer,
+            &1,
+            &2_000,
+            &None,
+            &bytes(&env, 1),
+        );
+        client.register_proof(
+            &second_proof,
+            &bytes(&env, 0x66),
+            &issuer,
+            &1,
+            &2_000,
+            &None,
+            &bytes(&env, 1),
+        );
 
         let first = client.commit_disclosure_consent(&first_proof, &policy_hash, &1, &receipt_hash);
         let other_proof =
@@ -3298,7 +3762,15 @@ mod test {
         assert_eq!(missing, Err(Ok(ProofError::ProofNotFound)));
 
         let issuer = Address::from_str(&env, ISSUER);
-        client.register_proof(&proof_id, &bytes(&env, 0x74), &issuer, &1, &100);
+        client.register_proof(
+            &proof_id,
+            &bytes(&env, 0x74),
+            &issuer,
+            &1,
+            &100,
+            &None,
+            &bytes(&env, 1),
+        );
         env.ledger().set_timestamp(101);
         let expired =
             client.try_commit_disclosure_consent(&proof_id, &policy_hash, &1, &receipt_hash);
@@ -3321,7 +3793,15 @@ mod test {
         let (env, client, ..) = setup();
         let proof_id = bytes(&env, 0x81);
         let issuer = Address::from_str(&env, ISSUER);
-        client.register_proof(&proof_id, &bytes(&env, 0x82), &issuer, &1, &100);
+        client.register_proof(
+            &proof_id,
+            &bytes(&env, 0x82),
+            &issuer,
+            &1,
+            &100,
+            &None,
+            &bytes(&env, 1),
+        );
         env.ledger().set_timestamp(100);
 
         let result = client.try_commit_disclosure_consent(
@@ -3384,6 +3864,7 @@ mod test {
             &bytes(&env, 99),
         );
         issuer_registry.suspend_issuer(
+            &bytes(&env, 0x10),
             &bytes(&env, 10),
             &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
         );
@@ -4783,6 +5264,7 @@ mod test {
             commitment_hash: bytes(env, seed.wrapping_add(100)),
             schema_version: 1,
             expires_at,
+            proof_type: bytes(env, 1),
         }
     }
 
@@ -4957,6 +5439,7 @@ mod test {
             commitment_hash: bytes(&env, 102),
             schema_version: 0, // invalid: zero schema version
             expires_at: 2_000,
+            proof_type: bytes(&env, 1),
         });
         batch.push_back(batch_input(&env, 3, now)); // invalid: not in the future
 
@@ -4976,6 +5459,7 @@ mod test {
             commitment_hash: bytes(&env, 102),
             schema_version: 42, // never approved
             expires_at: 2_000,
+            proof_type: bytes(&env, 1),
         });
 
         let result = client.try_register_proofs_batch(&batch, &issuer);
@@ -5018,7 +5502,7 @@ mod test {
             &bytes(&env, 11),
             &bytes(&env, 99),
         );
-        ir.suspend_issuer(&bytes(&env, 10), &bytes(&env, 1));
+        ir.suspend_issuer(&bytes(&env, 0x10), &bytes(&env, 10), &bytes(&env, 1));
         let batch = make_batch(&env, &[1, 2], 2_000);
 
         let result = client.try_register_proofs_batch(&batch, &inactive_issuer);
@@ -5367,7 +5851,7 @@ mod test {
             &bytes(&env, 11),
             &bytes(&env, 99),
         );
-        issuer_registry.suspend_issuer(&bytes(&env, 10), &bytes(&env, 1));
+        issuer_registry.suspend_issuer(&bytes(&env, 0x10), &bytes(&env, 10), &bytes(&env, 1));
         let result = client.try_register_proof_with_activation(
             &bytes(&env, 7),
             &bytes(&env, 8),
@@ -6942,7 +7426,7 @@ mod test {
             &bytes(&env, 1),
         );
         // Suspend the issuer registered by setup (issuer_id == bytes 9).
-        issuer_registry.suspend_issuer(&bytes(&env, 9), &bytes(&env, 90));
+        issuer_registry.suspend_issuer(&bytes(&env, 0x10), &bytes(&env, 9), &bytes(&env, 90));
         assert_eq!(
             client.proof_validity(&proof_id),
             ProofValidity::IssuerInactive
@@ -7072,7 +7556,7 @@ mod test {
             &None,
             &bytes(&env, 1),
         );
-        issuer_registry.suspend_issuer(&bytes(&env, 9), &bytes(&env, 90));
+        issuer_registry.suspend_issuer(&bytes(&env, 0x10), &bytes(&env, 9), &bytes(&env, 90));
         protocol_config.deprecate_schema_version(&1);
         env.ledger().with_mut(|li| li.timestamp = 3_000);
         assert_eq!(client.proof_validity(&proof_id), ProofValidity::Expired);

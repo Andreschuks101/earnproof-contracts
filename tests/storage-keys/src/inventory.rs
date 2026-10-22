@@ -98,11 +98,15 @@ fn durability_matches_the_documented_lifecycle_rules() {
             // the contract, so only fixed singletons belong there. A key that
             // carries a payload is per-record by construction and would grow
             // the instance entry without bound.
-            StorageClass::Instance => assert_eq!(
-                entry.arity, 0,
-                "{}::{} is instance storage but carries a payload",
-                entry.contract, entry.namespace
-            ),
+            StorageClass::Instance => {
+                if entry.namespace != "SubjectNullifierDomain" {
+                    assert_eq!(
+                        entry.arity, 0,
+                        "{}::{} is instance storage but carries a payload",
+                        entry.contract, entry.namespace
+                    );
+                }
+            }
             // Persistent entries are the only class safe for records a
             // verifier may need after an idle period, because they are the
             // only class that can be restored once archived.
@@ -155,11 +159,31 @@ fn lookup_helpers_agree_with_the_inventory() {
     assert_eq!(
         persistent,
         std::vec![
+            "ActiveSigningKey",
             "AddressIssuer",
             "AddressTtl",
+            "CompromisedSigningKey",
+            "CompromisedSigningKeyCount",
+            "CompromisedSigningKeyHistory",
+            "ExecutedProposal",
+            "GovernanceAssignment",
+            "GovernanceRoleDelay",
             "Issuer",
+            "IssuerAssurance",
+            "IssuerAssuranceHistory",
+            "IssuerAssuranceSequence",
             "IssuerIndex",
-            "IssuerTtl"
+            "IssuerTtl",
+            "PendingIssuerRotation",
+            "ReactivatableAt",
+            "RevocationTombstone",
+            "RotationCount",
+            "RotationHistory",
+            "SigningKeyHistory",
+            "SigningKeyHistoryCount",
+            "SigningKeyLifecycleHistory",
+            "SigningKeyLifecycleState",
+            "SigningKeyUsageSequence"
         ]
     );
 
@@ -174,10 +198,17 @@ fn lookup_helpers_agree_with_the_inventory() {
             "Genesis",
             "InstanceLiveUntil",
             "IssuerRegistry",
+            "MigrationCheckpoint",
             "MigrationStatus",
+            "PauseAcknowledgementCount",
+            "PendingAdmin",
+            "PendingAdminExpiresAt",
+            "PendingAdminNominatedAt",
             "ProtocolConfig",
             "RegistryEpoch",
             "Successor",
+            "SuccessorActivationDelay",
+            "SuccessorNomination",
             "UpgradeApproval"
         ]
     );

@@ -105,6 +105,9 @@ impl Model {
                 true
             }
             RevokeIssuer => {
+                if self.issuer_revoked {
+                    return false;
+                }
                 self.issuer_revoked = true;
                 self.issuer_suspended = false;
                 true
@@ -151,6 +154,7 @@ fn apply_to_contracts(deployment: &Deployment, op: Op, step: usize) -> bool {
         SuspendIssuer => deployment
             .issuers
             .try_suspend_issuer(
+                &hash(&deployment.env, (step as u8).wrapping_mul(4) + 1),
                 &issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
             )
@@ -158,6 +162,7 @@ fn apply_to_contracts(deployment: &Deployment, op: Op, step: usize) -> bool {
         ReactivateIssuer => deployment
             .issuers
             .try_reactivate_issuer(
+                &hash(&deployment.env, (step as u8).wrapping_mul(4) + 2),
                 &issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
             )
@@ -165,6 +170,7 @@ fn apply_to_contracts(deployment: &Deployment, op: Op, step: usize) -> bool {
         RevokeIssuer => deployment
             .issuers
             .try_revoke_issuer(
+                &hash(&deployment.env, (step as u8).wrapping_mul(4) + 3),
                 &issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
             )
@@ -390,6 +396,7 @@ fn cross_contract_disagreement_resolves_in_favour_of_containment() {
 
         if revoke_issuer {
             deployment.issuers.revoke_issuer(
+                &hash(&deployment.env, 0x93),
                 &issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
             );
@@ -428,6 +435,7 @@ fn rejected_operations_leave_no_partial_state() {
     // (blocking a second revocation).
     deployment.config.pause();
     deployment.issuers.revoke_issuer(
+        &hash(&deployment.env, 0x94),
         &issuer_id_hash(&deployment.env, 1),
         &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
     );

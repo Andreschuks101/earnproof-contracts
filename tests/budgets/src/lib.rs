@@ -67,6 +67,8 @@ mod tests {
     const ISSUER_UPDATE_MEM_MAX: u64 = 150_000;
     const ISSUER_SUSPEND_CPU_MAX: u64 = 560_000;
     const ISSUER_SUSPEND_MEM_MAX: u64 = 160_000;
+    const ISSUER_BULK_SUSPEND_CPU_MAX: u64 = 10_000_000;
+    const ISSUER_BULK_SUSPEND_MEM_MAX: u64 = 1_600_000;
     const ISSUER_REVOKE_CPU_MAX: u64 = 500_000;
     const ISSUER_REVOKE_MEM_MAX: u64 = 150_000;
     // The issuer index preserves stable registration-order metadata while
@@ -409,6 +411,7 @@ mod tests {
         env.cost_estimate().budget().reset_unlimited();
 
         client.suspend_issuer(
+            &bytes(&env, 0x10),
             &issuer_id,
             &soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32]),
         );
@@ -476,6 +479,7 @@ mod tests {
         env.cost_estimate().budget().reset_unlimited();
 
         client.revoke_issuer(
+            &bytes(&env, 0x10),
             &issuer_id,
             &soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32]),
         );
@@ -801,7 +805,6 @@ mod tests {
             &issuer,
             &1,
             &2_000,
-            &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
             &500,
         );
 

@@ -229,7 +229,8 @@ fn governed_dependency_pair_migration_keeps_registration_operational() {
     let config_id = env.register(ProtocolConfigContract, ());
     let config = ProtocolConfigContractClient::new(env, &config_id);
     config.initialize(&deployment.admin);
-    config.approve_schema_version(&hash(env, 0x21), &APPROVED_SCHEMA);
+    config.approve_schema_version(&APPROVED_SCHEMA);
+    config.approve_proof_type(&soroban_sdk::BytesN::from_array(env, &[1u8; 32]));
 
     let issuers_id = env.register(IssuerRegistryContract, ());
     let issuers = IssuerRegistryContractClient::new(env, &issuers_id);
@@ -254,12 +255,13 @@ fn governed_dependency_pair_migration_keeps_registration_operational() {
     assert_eq!(deployment.proofs.get_issuer_registry(), issuers_id);
     assert_eq!(deployment.proofs.get_protocol_config(), config_id);
 
-    deployment.proofs.register_proof(
+    deployment.proofs.register_proof_with_type_identifier(
         &hash(env, 0x25),
         &commitment(env, 0x25),
         &deployment.issuer,
         &APPROVED_SCHEMA,
         &deployment.expiry(),
+        &soroban_sdk::BytesN::from_array(env, &[1u8; 32]),
     );
 }
 

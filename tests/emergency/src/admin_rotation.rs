@@ -232,6 +232,7 @@ fn issuer_containment_requires_the_issuer_registry_admin() {
 
     deployment.config.pause();
     deployment.issuers.suspend_issuer(
+        &crate::harness::hash(&deployment.env, 0x81),
         &issuer_id,
         &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
     );
@@ -278,6 +279,7 @@ fn a_revoked_issuer_cannot_be_reactivated_after_the_incident() {
 
     deployment.config.pause();
     deployment.issuers.revoke_issuer(
+        &crate::harness::hash(&deployment.env, 0x82),
         &issuer_id,
         &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
     );
@@ -287,6 +289,7 @@ fn a_revoked_issuer_cannot_be_reactivated_after_the_incident() {
         deployment
             .issuers
             .try_reactivate_issuer(
+                &crate::harness::hash(&deployment.env, 0x83),
                 &issuer_id,
                 &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32])
             )
@@ -306,6 +309,7 @@ fn a_revoked_issuer_cannot_register_new_proofs_after_unpause() {
 
     deployment.config.pause();
     deployment.issuers.revoke_issuer(
+        &crate::harness::hash(&deployment.env, 0x84),
         &issuer_id,
         &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
     );

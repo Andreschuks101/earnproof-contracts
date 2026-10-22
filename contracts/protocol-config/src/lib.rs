@@ -1,24 +1,29 @@
 #![no_std]
 
 use earnproof_shared::{
-    AdminTransferState, AdminTransferStatus, ConfigChangeCategory, ConfigChangeSummary,
-    ContractError, CriticalAction, CriticalActionPolicy, CriticalActionProposal, GenesisRecord,
-    InterfaceVersion, MigrationStatus, PauseAcknowledgementRecord, PauseAcknowledgementRole,
-    PauseScope, SchemaPolicy, ADMIN_TRANSFER_EXPIRY_LEDGERS, CONFIG_HISTORY_CAPACITY,
-    CRITICAL_ACTION_APPROVAL_EXPIRY_LEDGERS, DEFAULT_SCHEMA_PAYLOAD_LIMIT,
-    LEGACY_COMMITMENT_ALGORITHM, LEGACY_PROOF_TYPE, MAX_CONFIG_HISTORY_PAGE,
-    MAX_CRITICAL_ACTION_SIGNERS, MAX_MIGRATION_BATCH, MAX_PAUSE_ACKNOWLEDGEMENT_HISTORY_PAGE,
-    ConfigChangeCategory, ConfigChangeSummary, ContractError, CriticalAction, CriticalActionPolicy,
-    CriticalActionProposal, DisputeFilingAnchor, DisputeFilingPolicy, GenesisRecord,
-    InterfaceVersion, MigrationStatus, PauseScope, SchemaLifecyclePolicy, SchemaPolicy,
-    SchemaPolicyDigest, SchemaRateLimit, CONFIG_HISTORY_CAPACITY,
+    compute_migration_checkpoint_checksum, make_query_envelope_header, AdminTransferState,
+    AdminTransferStatus, CapacityEnvelope, CheckpointEnvelope, ConfigChangeCategory,
+    ConfigChangeSummary, ContractError, CriticalAction, CriticalActionPolicy,
+    CriticalActionProposal, DisputeFilingAnchor, DisputeFilingPolicy, EmergencyAction,
+    EmergencyActionProposal, EmergencyFastTrackPolicy, ErrorCatalogDescriptor, GenesisRecord,
+    GovernanceActionDomain, GovernanceApprovalEligibility, GovernanceApprovalSnapshot,
+    GovernanceApproverSnapshot, GovernanceApproverVersion, HistoryEnvelope, InterfaceVersion,
+    MigrationCheckpoint, MigrationStatus, PauseAcknowledgementRecord, PauseAcknowledgementRole,
+    PauseScope, PolicyEnvelope, SchemaActivationNotice, SchemaActivationState, SchemaCompatibility,
+    SchemaLifecyclePolicy, SchemaPolicy, SchemaPolicyDigest, SchemaRateLimit,
+    SchemaReplacementPointer, SchemaStatusResult, SchemaVersionState, SuccessorNominationRecord,
+    SuccessorState, SuccessorStatus, ADMIN_TRANSFER_EXPIRY_LEDGERS, CONFIG_HISTORY_CAPACITY,
     CRITICAL_ACTION_APPROVAL_EXPIRY_LEDGERS, DEFAULT_SCHEMA_PAYLOAD_LIMIT,
     DEFAULT_SCHEMA_RATE_LIMIT, DEFAULT_SCHEMA_RATE_WINDOW_LEDGERS, DISPUTE_FILING_POLICY_VERSION,
+    EMERGENCY_FAST_TRACK_ENCODING_VERSION, ERROR_CATALOG_VERSION, GOVERNANCE_ACTION_HASH_VERSION,
+    GOVERNANCE_APPROVAL_SNAPSHOT_VERSION, GOVERNANCE_APPROVER_SNAPSHOT_VERSION,
     LEGACY_COMMITMENT_ALGORITHM, LEGACY_PROOF_TYPE, MAX_CONFIG_HISTORY_PAGE,
     MAX_CRITICAL_ACTION_SIGNERS, MAX_MIGRATION_BATCH, MAX_NULLIFIER_DOMAIN_VERSIONS,
-    MAX_SCHEMA_LINEAGE_DEPTH, MAX_SCHEMA_PROOF_TYPES, MAX_SCHEMA_VALIDITY_SECONDS,
-    MIGRATION_STATUS_VERSION, PROTOCOL_CONFIG_INTERFACE_VERSION, SHA256_COMMITMENT_ALGORITHM_V1,
-    TTL_EXTEND_TO_LEDGERS, TTL_THRESHOLD_LEDGERS,
+    MAX_PAUSE_ACKNOWLEDGEMENT_HISTORY_PAGE, MAX_SCHEMA_ACTIVATION_NOTICE_SECONDS,
+    MAX_SCHEMA_LINEAGE_DEPTH, MAX_SCHEMA_PROOF_TYPES, MAX_SCHEMA_STATUS_BATCH,
+    MAX_SCHEMA_VALIDITY_SECONDS, MIGRATION_CHECKPOINT_VERSION, MIGRATION_STATUS_VERSION,
+    PROTOCOL_CONFIG_ERROR_MAX, PROTOCOL_CONFIG_ERROR_MIN, PROTOCOL_CONFIG_INTERFACE_VERSION,
+    SHA256_COMMITMENT_ALGORITHM_V1, TTL_EXTEND_TO_LEDGERS, TTL_THRESHOLD_LEDGERS,
 };
 use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype, xdr::ToXdr, Address, BytesN, Env, Symbol,
@@ -55,6 +60,9 @@ enum DataKey {
     /// Prevents installing an older (or equal) version over a newer one.
     ContractVersion,
     Successor,
+    SuccessorActivationDelay,
+    SuccessorNomination,
+    MigrationCheckpoint,
     Decommissioned,
     /// Immutable deployment identity, written once at `initialize`.
     Genesis,
@@ -772,9 +780,24 @@ impl ProtocolConfigContract {
         let admin = Self::get_admin(env.clone())?;
         Self::require_valid_principal(&successor)?;
         Self::require_auth(&admin);
+        let delay = env
+            .storage()
+            .instance()
+            .get(&DataKey::SuccessorActivationDelay)
+            .unwrap_or(0u32);
+        let current_ledger = env.ledger().sequence();
+        let earliest_activation_ledger = current_ledger.saturating_add(delay);
+        let record = SuccessorNominationRecord {
+            successor: successor.clone(),
+            nominated_at_ledger: current_ledger,
+            earliest_activation_ledger,
+        };
         env.storage()
             .instance()
             .set(&DataKey::Successor, &successor);
+        env.storage()
+            .instance()
+            .set(&DataKey::SuccessorNomination, &record);
         SuccessorNominated {
             successor: successor.clone(),
             nominated_by: admin,
@@ -787,6 +810,75 @@ impl ProtocolConfigContract {
         env.storage().instance().get(&DataKey::Successor)
     }
 
+    pub fn get_successor_activation_delay(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SuccessorActivationDelay)
+            .unwrap_or(0u32)
+    }
+
+    pub fn set_successor_activation_delay(env: Env, delay: u32) -> Result<(), ContractError> {
+        Self::ensure_not_decommissioned(&env)?;
+        let admin = Self::get_admin(env.clone())?;
+        Self::require_auth(&admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::SuccessorActivationDelay, &delay);
+        Ok(())
+    }
+
+    pub fn cancel_successor_nomination(env: Env) -> Result<(), ContractError> {
+        Self::ensure_not_decommissioned(&env)?;
+        let admin = Self::get_admin(env.clone())?;
+        Self::require_auth(&admin);
+        env.storage().instance().remove(&DataKey::Successor);
+        env.storage()
+            .instance()
+            .remove(&DataKey::SuccessorNomination);
+        Ok(())
+    }
+
+    pub fn get_successor_status(env: Env) -> SuccessorStatus {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Decommissioned)
+            .unwrap_or(false)
+        {
+            return SuccessorStatus {
+                state: SuccessorState::Decommissioned,
+                successor: Self::get_successor(env.clone()),
+                nominated_at_ledger: 0,
+                earliest_activation_ledger: 0,
+            };
+        }
+        match env
+            .storage()
+            .instance()
+            .get::<_, SuccessorNominationRecord>(&DataKey::SuccessorNomination)
+        {
+            Some(record) => {
+                let state = if env.ledger().sequence() >= record.earliest_activation_ledger {
+                    SuccessorState::Ready
+                } else {
+                    SuccessorState::Pending
+                };
+                SuccessorStatus {
+                    state,
+                    successor: Some(record.successor),
+                    nominated_at_ledger: record.nominated_at_ledger,
+                    earliest_activation_ledger: record.earliest_activation_ledger,
+                }
+            }
+            None => SuccessorStatus {
+                state: SuccessorState::Absent,
+                successor: None,
+                nominated_at_ledger: 0,
+                earliest_activation_ledger: 0,
+            },
+        }
+    }
+
     pub fn activate_successor(env: Env) -> Result<(), ContractError> {
         Self::ensure_not_decommissioned(&env)?;
         let admin = Self::get_admin(env.clone())?;
@@ -797,9 +889,22 @@ impl ProtocolConfigContract {
             .get(&DataKey::Successor)
             .ok_or(ContractError::NotFound)?;
 
+        if let Some(record) = env
+            .storage()
+            .instance()
+            .get::<_, SuccessorNominationRecord>(&DataKey::SuccessorNomination)
+        {
+            if env.ledger().sequence() < record.earliest_activation_ledger {
+                return Err(ContractError::UpgradeTimelockNotElapsed);
+            }
+        }
+
         env.storage()
             .instance()
             .set(&DataKey::Decommissioned, &true);
+        env.storage()
+            .instance()
+            .remove(&DataKey::SuccessorNomination);
         ContractDecommissioned {
             old_instance: env.current_contract_address(),
             successor_instance: successor,
@@ -1037,10 +1142,6 @@ impl ProtocolConfigContract {
         env.storage()
             .instance()
             .set(&DataKey::MinSchemaActivationNotice, &minimum_notice_seconds);
-            .persistent()
-            .set(&DataKey::SchemaVersion(version), &true);
-        Self::record_schema_approval(&env, version);
-        Self::extend_schema_ttl(env.clone(), version);
         Self::bump_config_version(env.clone());
         Self::append_config_history(
             env.clone(),
@@ -1168,6 +1269,31 @@ impl ProtocolConfigContract {
         chain
     }
 
+    pub fn get_schema_statuses(
+        env: Env,
+        versions: Vec<u32>,
+    ) -> Result<Vec<SchemaStatusResult>, ContractError> {
+        if versions.len() > MAX_SCHEMA_STATUS_BATCH {
+            return Err(ContractError::BatchTooLarge);
+        }
+
+        let mut results = Vec::new(&env);
+        for version in versions.iter() {
+            let state = if version == 0 {
+                SchemaVersionState::Unknown
+            } else {
+                let key = DataKey::SchemaVersion(version);
+                match env.storage().persistent().get::<DataKey, bool>(&key) {
+                    Some(true) => SchemaVersionState::Approved,
+                    Some(false) => SchemaVersionState::Deprecated,
+                    None => SchemaVersionState::Unknown,
+                }
+            };
+            results.push_back(SchemaStatusResult { version, state });
+        }
+        Ok(results)
+    }
+
     pub fn is_schema_version_approved(env: Env, version: u32) -> bool {
         if version == 0 {
             return false;
@@ -1253,9 +1379,11 @@ impl ProtocolConfigContract {
             .get(&key)
             .unwrap_or_else(|| Self::legacy_schema_policy(&env));
         if env.storage().persistent().has(&key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&key, TTL_THRESHOLD_LEDGERS, TTL_EXTEND_TO_LEDGERS);
+            env.storage().persistent().extend_ttl(
+                &key,
+                TTL_THRESHOLD_LEDGERS,
+                TTL_EXTEND_TO_LEDGERS,
+            );
         }
         policy
     }
@@ -1966,7 +2094,6 @@ impl ProtocolConfigContract {
         let commitment = Self::commit(&env, proposal.action.clone());
         match proposal.action.clone() {
             CriticalAction::SchemaApproval(version) => {
-                Self::apply_schema_activation(
                 Self::ensure_nonzero_version(version)?;
                 env.storage()
                     .persistent()
@@ -1975,11 +2102,9 @@ impl ProtocolConfigContract {
                 Self::extend_schema_ttl(env.clone(), version);
                 Self::record_critical_action_change(
                     env.clone(),
-                    version,
-                    env.ledger().timestamp(),
                     ConfigChangeCategory::SchemaApproval,
                     commitment,
-                )?;
+                );
             }
             CriticalAction::SchemaActivation(version, activates_at) => {
                 Self::apply_schema_activation(
@@ -2583,11 +2708,133 @@ impl ProtocolConfigContract {
         }
         status.cursor = next;
         status.complete = next == status.total_items;
+        let source_version = Self::get_contract_version(env.clone());
+        let target_version = status.target_contract_version;
+        let checksum = compute_migration_checkpoint_checksum(
+            &env,
+            source_version,
+            target_version,
+            expected_cursor,
+            next,
+            processed_items,
+            status.total_items,
+        );
+        let checkpoint = MigrationCheckpoint {
+            checkpoint_version: MIGRATION_CHECKPOINT_VERSION,
+            source_version,
+            target_version,
+            cursor_start: expected_cursor,
+            cursor_end: next,
+            processed_count: processed_items,
+            total_items: status.total_items,
+            checksum,
+        };
         env.storage()
             .instance()
             .set(&DataKey::MigrationStatus, &status);
+        env.storage()
+            .instance()
+            .set(&DataKey::MigrationCheckpoint, &checkpoint);
         Self::extend_instance_ttl(env);
         Ok(status)
+    }
+
+    pub fn get_migration_checkpoint(env: Env) -> Option<MigrationCheckpoint> {
+        env.storage().instance().get(&DataKey::MigrationCheckpoint)
+    }
+
+    pub fn resume_migration(
+        env: Env,
+        checkpoint: MigrationCheckpoint,
+    ) -> Result<MigrationStatus, ContractError> {
+        let admin = Self::get_admin(env.clone())?;
+        Self::require_auth(&admin);
+        if checkpoint.checkpoint_version != MIGRATION_CHECKPOINT_VERSION {
+            return Err(ContractError::InvalidInput);
+        }
+        let expected_checksum = compute_migration_checkpoint_checksum(
+            &env,
+            checkpoint.source_version,
+            checkpoint.target_version,
+            checkpoint.cursor_start,
+            checkpoint.cursor_end,
+            checkpoint.processed_count,
+            checkpoint.total_items,
+        );
+        if checkpoint.checksum != expected_checksum {
+            return Err(ContractError::InvalidInput);
+        }
+        let status = Self::get_migration_status(env.clone()).ok_or(ContractError::InvalidState)?;
+        if status.target_contract_version != checkpoint.target_version
+            || status.total_items != checkpoint.total_items
+            || status.cursor != checkpoint.cursor_end
+        {
+            return Err(ContractError::InvalidState);
+        }
+        if let Some(stored) = Self::get_migration_checkpoint(env.clone()) {
+            if stored != checkpoint {
+                return Err(ContractError::InvalidState);
+            }
+        }
+        Ok(status)
+    }
+
+    pub fn get_error_catalog_version(_env: Env) -> ErrorCatalogDescriptor {
+        ErrorCatalogDescriptor {
+            catalog_version: ERROR_CATALOG_VERSION,
+            min_code: PROTOCOL_CONFIG_ERROR_MIN,
+            max_code: PROTOCOL_CONFIG_ERROR_MAX,
+        }
+    }
+
+    pub fn get_capacity_envelope(env: Env) -> CapacityEnvelope {
+        let config_version = Self::get_config_version(env.clone());
+        let active_count = env
+            .storage()
+            .instance()
+            .get(&DataKey::ConfigHistoryTotal)
+            .unwrap_or(0u32)
+            .min(CONFIG_HISTORY_CAPACITY);
+        CapacityEnvelope {
+            header: make_query_envelope_header(&env, config_version),
+            active_count,
+            max_capacity: CONFIG_HISTORY_CAPACITY,
+        }
+    }
+
+    pub fn get_policy_envelope(env: Env, version: u32) -> Result<PolicyEnvelope, ContractError> {
+        let policy = Self::get_schema_policy(env.clone(), version);
+        let config_version = Self::get_config_version(env.clone());
+        Ok(PolicyEnvelope {
+            header: make_query_envelope_header(&env, config_version),
+            policy,
+        })
+    }
+
+    pub fn get_history_envelope(env: Env) -> HistoryEnvelope {
+        let total_records = env
+            .storage()
+            .instance()
+            .get(&DataKey::ConfigHistoryTotal)
+            .unwrap_or(0u32);
+        let config_version = Self::get_config_version(env.clone());
+        HistoryEnvelope {
+            header: make_query_envelope_header(&env, config_version),
+            total_records,
+        }
+    }
+
+    pub fn get_checkpoint_envelope(env: Env) -> Result<CheckpointEnvelope, ContractError> {
+        let checkpoint = env
+            .storage()
+            .instance()
+            .get(&DataKey::MigrationCheckpoint)
+            .ok_or(ContractError::NotFound)?;
+        let config_version = Self::get_config_version(env.clone());
+        Ok(CheckpointEnvelope {
+            header: make_query_envelope_header(&env, config_version),
+            checkpoint,
+        })
     }
 
     fn require_auth(address: &Address) {
@@ -3194,16 +3441,11 @@ mod test {
 
     use super::{DataKey, ProtocolConfigContract, ProtocolConfigContractClient};
     use earnproof_shared::{
-        ConfigChangeCategory, ContractError, CriticalAction, CriticalActionPolicy, EmergencyAction,
-        EmergencyFastTrackPolicy, GovernanceApprovalEligibility, PauseScope,
-        CRITICAL_ACTION_APPROVAL_EXPIRY_LEDGERS, GOVERNANCE_ACTION_HASH_VERSION,
-        TTL_THRESHOLD_LEDGERS,
         AdminTransferState, ConfigChangeCategory, ContractError, CriticalAction,
-        CriticalActionPolicy, ADMIN_TRANSFER_EXPIRY_LEDGERS,
-        CRITICAL_ACTION_APPROVAL_EXPIRY_LEDGERS, TTL_THRESHOLD_LEDGERS,
-        ConfigChangeCategory, ContractError, CriticalAction, CriticalActionPolicy,
-        DisputeFilingAnchor, DisputeFilingPolicy, SchemaRateLimit,
-        CRITICAL_ACTION_APPROVAL_EXPIRY_LEDGERS, DISPUTE_FILING_POLICY_VERSION,
+        CriticalActionPolicy, DisputeFilingAnchor, DisputeFilingPolicy, EmergencyAction,
+        EmergencyFastTrackPolicy, GovernanceApprovalEligibility, PauseScope, SchemaRateLimit,
+        ADMIN_TRANSFER_EXPIRY_LEDGERS, CRITICAL_ACTION_APPROVAL_EXPIRY_LEDGERS,
+        DISPUTE_FILING_POLICY_VERSION, GOVERNANCE_ACTION_HASH_VERSION,
         SCHEMA_POLICY_DIGEST_VERSION, TTL_THRESHOLD_LEDGERS,
     };
     use soroban_sdk::{

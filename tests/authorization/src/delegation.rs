@@ -78,6 +78,7 @@ fn register_proof_demands_exactly_the_named_issuer() {
             &d.issuer,
             &APPROVED_SCHEMA,
             &expires_at,
+            Option::<soroban_sdk::BytesN<32>>::None,
             &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]),
         )
             .into_val(&d.env),

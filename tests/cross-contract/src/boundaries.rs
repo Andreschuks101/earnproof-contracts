@@ -138,6 +138,7 @@ fn register_with_root_auth_only(deployment: &Deployment, proof_id: &BytesN<32>) 
         deployment.issuer.clone(),
         APPROVED_SCHEMA,
         expires_at,
+        Option::<soroban_sdk::BytesN<32>>::None,
         soroban_sdk::BytesN::from_array(env, &[1u8; 32]),
     )
         .into_val(env);

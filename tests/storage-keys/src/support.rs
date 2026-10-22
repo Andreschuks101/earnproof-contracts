@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Key builders and contract-scoped storage scanning.
 //!
 //! ## Rebuilding the keys
@@ -188,6 +189,10 @@ pub fn max_active_issuers_key(env: &Env) -> (Symbol,) {
 pub fn reactivation_cooldown_key(env: &Env) -> (Symbol,) {
     (Symbol::new(env, "ReactivationCooldown"),)
 }
+pub fn consent_receipt_key(env: &Env, commitment: &BytesN<32>) -> (Symbol, BytesN<32>) {
+    (Symbol::new(env, "ConsentReceipt"), commitment.clone())
+}
+
 pub fn proof_ttl_key(env: &Env, id: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (Symbol::new(env, "ProofTtl"), id.clone())
 }
@@ -397,10 +402,12 @@ pub fn exercised_deployment() -> Deployment {
         &bytes32(&env, 99),
     );
     issuers.suspend_issuer(
+        &bytes32(&env, 0x81),
         &bytes32(&env, 10),
         &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
     );
     issuers.reactivate_issuer(
+        &bytes32(&env, 0x82),
         &bytes32(&env, 10),
         &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
     );
@@ -412,6 +419,7 @@ pub fn exercised_deployment() -> Deployment {
         &bytes32(&env, 99),
     );
     issuers.revoke_issuer(
+        &bytes32(&env, 0x83),
         &bytes32(&env, 20),
         &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
     );
@@ -422,6 +430,7 @@ pub fn exercised_deployment() -> Deployment {
         &bytes32(&env, 99),
     );
     issuers.suspend_issuer(
+        &bytes32(&env, 0x84),
         &bytes32(&env, 30),
         &soroban_sdk::BytesN::from_array(&env, &[2u8; 32]),
     );
@@ -491,8 +500,8 @@ pub fn exercised_deployment() -> Deployment {
     config.nominate_successor(&successor);
     config.activate_successor();
 
-    issuers.nominate_successor(&successor);
-    issuers.activate_successor();
+    issuers.nominate_successor(&bytes32(&env, 0x85), &successor);
+    issuers.activate_successor(&bytes32(&env, 0x86));
 
     proofs.nominate_successor(&successor);
     proofs.activate_successor();

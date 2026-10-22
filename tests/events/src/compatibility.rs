@@ -9,7 +9,7 @@
 //! the fixtures usable as a compatibility contract for indexers rather than
 //! documentation that happened to be true once.
 
-use crate::harness::{hash, read_events, Deployment, ObservedEvent, APPROVED_SCHEMA};
+use crate::harness::{hash, read_events, Deployment, ObservedEvent};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, Symbol, TryFromVal, Val};
 
@@ -282,6 +282,7 @@ fn issuer_registry_events_match_their_fixtures() {
 
     for event in deployment.capture(|| {
         deployment.issuers.suspend_issuer(
+            &hash(&deployment.env, 0x81),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )
@@ -291,6 +292,7 @@ fn issuer_registry_events_match_their_fixtures() {
 
     for event in deployment.capture(|| {
         deployment.issuers.reactivate_issuer(
+            &hash(&deployment.env, 0x82),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )
@@ -308,6 +310,7 @@ fn issuer_registry_events_match_their_fixtures() {
 
     for event in deployment.capture(|| {
         deployment.issuers.revoke_issuer(
+            &hash(&deployment.env, 0x83),
             &deployment.issuer_id,
             &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
         )

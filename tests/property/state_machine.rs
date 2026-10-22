@@ -92,17 +92,14 @@ proptest! {
 
         for (i, op) in ops.into_iter().enumerate() {
             let op_kind = op % 3;
-            let expected_success = match (op_kind, &status) {
-                (0, IssuerStatus::Revoked) => false, // suspend
-                (1, IssuerStatus::Revoked) => false, // reactivate
-                _ => true,
-            };
+            let expected_success = status != IssuerStatus::Revoked;
 
             let before = client.get_issuer(&issuer_id);
+            let pid = bytes(&env, (i + 1) as u8);
             let success = try_op(&env, || match op_kind {
-                0 => { client.suspend_issuer(&issuer_id, &soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32])); }
-                1 => { client.reactivate_issuer(&issuer_id, &soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32])); }
-                _ => { client.revoke_issuer(&issuer_id, &soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32])); }
+                0 => { client.suspend_issuer(&pid, &issuer_id, &soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32])); }
+                1 => { client.reactivate_issuer(&pid, &issuer_id, &soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32])); }
+                _ => { client.revoke_issuer(&pid, &issuer_id, &soroban_sdk::BytesN::from_array(&client.env, &[1u8; 32])); }
             });
             prop_assert_eq!(success, expected_success, "iteration {}", i);
 
