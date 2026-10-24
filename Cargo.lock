@@ -350,6 +350,9 @@ name = "contract-compatibility-gate"
 version = "0.1.0"
 dependencies = [
  "earnproof-shared",
+ "issuer-registry",
+ "proof-registry",
+ "protocol-config",
  "serde",
  "serde_json",
  "soroban-sdk",

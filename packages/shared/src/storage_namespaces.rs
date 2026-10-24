@@ -49,7 +49,7 @@ pub const CONTRACTS: [&str; 3] = ["issuer-registry", "proof-registry", "protocol
 /// Adding a row here is the second half of adding a storage key; the first is
 /// adding the `DataKey` variant. Doing one without the other fails the tests in
 /// `tests/storage-keys/`.
-pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
+pub const STORAGE_NAMESPACES: [StorageNamespace; 105] = [
     StorageNamespace {
         contract: "issuer-registry",
         namespace: "ActiveIssuerCount",
@@ -140,10 +140,10 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
     },
     StorageNamespace {
         contract: "issuer-registry",
-        namespace: "DeploymentDomain",
-        arity: 0,
-        class: StorageClass::Instance,
-        value: "BytesN<32>",
+        namespace: "ExecutedProposal",
+        arity: 1,
+        class: StorageClass::Persistent,
+        value: "bool",
         owner: "registry operator",
     },
     StorageNamespace {
@@ -252,6 +252,14 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
     },
     StorageNamespace {
         contract: "issuer-registry",
+        namespace: "MigrationCheckpoint",
+        arity: 0,
+        class: StorageClass::Instance,
+        value: "MigrationCheckpoint",
+        owner: "migration operator",
+    },
+    StorageNamespace {
+        contract: "issuer-registry",
         namespace: "MigrationStatus",
         arity: 0,
         class: StorageClass::Instance,
@@ -281,6 +289,14 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
         class: StorageClass::Instance,
         value: "u32",
         owner: "deployment operator",
+    },
+    StorageNamespace {
+        contract: "issuer-registry",
+        namespace: "PendingIssuerRotation",
+        arity: 1,
+        class: StorageClass::Persistent,
+        value: "PendingIssuerRotation",
+        owner: "registry operator",
     },
     StorageNamespace {
         contract: "issuer-registry",
@@ -348,26 +364,26 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
     },
     StorageNamespace {
         contract: "issuer-registry",
-        namespace: "StorageLayoutMigration",
-        arity: 0,
-        class: StorageClass::Instance,
-        value: "u32",
-        owner: "registry operator",
-    },
-    StorageNamespace {
-        contract: "issuer-registry",
-        namespace: "StorageLayoutVersion",
-        arity: 0,
-        class: StorageClass::Instance,
-        value: "u32",
-        owner: "registry operator",
-    },
-    StorageNamespace {
-        contract: "issuer-registry",
         namespace: "Successor",
         arity: 0,
         class: StorageClass::Instance,
         value: "Address",
+        owner: "registry operator",
+    },
+    StorageNamespace {
+        contract: "issuer-registry",
+        namespace: "SuccessorActivationDelay",
+        arity: 0,
+        class: StorageClass::Instance,
+        value: "u32",
+        owner: "registry operator",
+    },
+    StorageNamespace {
+        contract: "issuer-registry",
+        namespace: "SuccessorNomination",
+        arity: 0,
+        class: StorageClass::Instance,
+        value: "SuccessorNominationRecord",
         owner: "registry operator",
     },
     StorageNamespace {
@@ -392,6 +408,38 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
         arity: 1,
         class: StorageClass::Persistent,
         value: "ArchivedProofRecord",
+        owner: "issuing party",
+    },
+    StorageNamespace {
+        contract: "proof-registry",
+        namespace: "ConsentReceipt",
+        arity: 1,
+        class: StorageClass::Persistent,
+        value: "bool",
+        owner: "issuing party",
+    },
+    StorageNamespace {
+        contract: "proof-registry",
+        namespace: "ConsentWithdrawal",
+        arity: 1,
+        class: StorageClass::Persistent,
+        value: "ConsentWithdrawalRecord",
+        owner: "issuing party",
+    },
+    StorageNamespace {
+        contract: "proof-registry",
+        namespace: "ConsentWithdrawalCount",
+        arity: 0,
+        class: StorageClass::Instance,
+        value: "u64",
+        owner: "issuing party",
+    },
+    StorageNamespace {
+        contract: "proof-registry",
+        namespace: "ConsentWithdrawalIndex",
+        arity: 2,
+        class: StorageClass::Persistent,
+        value: "u64",
         owner: "issuing party",
     },
     StorageNamespace {
@@ -476,6 +524,14 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
     },
     StorageNamespace {
         contract: "proof-registry",
+        namespace: "MigrationCheckpoint",
+        arity: 0,
+        class: StorageClass::Instance,
+        value: "MigrationCheckpoint",
+        owner: "migration operator",
+    },
+    StorageNamespace {
+        contract: "proof-registry",
         namespace: "MigrationStatus",
         arity: 0,
         class: StorageClass::Instance,
@@ -556,6 +612,14 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
     },
     StorageNamespace {
         contract: "proof-registry",
+        namespace: "ProofPolicyVersions",
+        arity: 1,
+        class: StorageClass::Persistent,
+        value: "ProofPolicyVersions",
+        owner: "issuing party",
+    },
+    StorageNamespace {
+        contract: "proof-registry",
         namespace: "ProofTtl",
         arity: 1,
         class: StorageClass::Persistent,
@@ -596,22 +660,6 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
     },
     StorageNamespace {
         contract: "proof-registry",
-        namespace: "StorageLayoutMigration",
-        arity: 0,
-        class: StorageClass::Instance,
-        value: "u32",
-        owner: "deployment operator",
-    },
-    StorageNamespace {
-        contract: "proof-registry",
-        namespace: "StorageLayoutVersion",
-        arity: 0,
-        class: StorageClass::Instance,
-        value: "u32",
-        owner: "deployment operator",
-    },
-    StorageNamespace {
-        contract: "proof-registry",
         namespace: "SubjectNullifier",
         arity: 1,
         class: StorageClass::Persistent,
@@ -624,6 +672,22 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
         arity: 0,
         class: StorageClass::Instance,
         value: "Address",
+        owner: "deployment operator",
+    },
+    StorageNamespace {
+        contract: "proof-registry",
+        namespace: "SuccessorActivationDelay",
+        arity: 0,
+        class: StorageClass::Instance,
+        value: "u32",
+        owner: "deployment operator",
+    },
+    StorageNamespace {
+        contract: "proof-registry",
+        namespace: "SuccessorNomination",
+        arity: 0,
+        class: StorageClass::Instance,
+        value: "SuccessorNominationRecord",
         owner: "deployment operator",
     },
     StorageNamespace {
@@ -729,6 +793,14 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
         class: StorageClass::Instance,
         value: "GenesisRecord",
         owner: "protocol operator",
+    },
+    StorageNamespace {
+        contract: "protocol-config",
+        namespace: "HistoryRetention",
+        arity: 1,
+        class: StorageClass::Persistent,
+        value: "HistoryRetentionState",
+        owner: "governance operator",
     },
     StorageNamespace {
         contract: "protocol-config",
@@ -896,22 +968,6 @@ pub const STORAGE_NAMESPACES: [StorageNamespace; 111] = [
         arity: 1,
         class: StorageClass::Persistent,
         value: "bool",
-        owner: "protocol operator",
-    },
-    StorageNamespace {
-        contract: "protocol-config",
-        namespace: "StorageLayoutMigration",
-        arity: 0,
-        class: StorageClass::Instance,
-        value: "u32",
-        owner: "protocol operator",
-    },
-    StorageNamespace {
-        contract: "protocol-config",
-        namespace: "StorageLayoutVersion",
-        arity: 0,
-        class: StorageClass::Instance,
-        value: "u32",
         owner: "protocol operator",
     },
     StorageNamespace {
