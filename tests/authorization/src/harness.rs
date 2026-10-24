@@ -282,6 +282,8 @@ impl Deployment<'_> {
         let proof_id = hash(&self.env, discriminator);
         let commitment = hash(&self.env, discriminator ^ 0xFF);
         let expires_at = self.env.ledger().timestamp() + 100_000;
+        let proof_type = soroban_sdk::BytesN::from_array(&self.env, &[1u8; 32]);
+        let predecessor: Option<BytesN<32>> = None;
         authorize(
             &self.env,
             &self.issuer,
@@ -293,7 +295,8 @@ impl Deployment<'_> {
                 &self.issuer,
                 &APPROVED_SCHEMA,
                 &expires_at,
-                &soroban_sdk::BytesN::from_array(&self.env, &[1u8; 32]),
+                &predecessor,
+                &proof_type,
             )
                 .into_val(&self.env),
         );
@@ -303,7 +306,8 @@ impl Deployment<'_> {
             &self.issuer,
             &APPROVED_SCHEMA,
             &expires_at,
-            &soroban_sdk::BytesN::from_array(&self.env, &[1u8; 32]),
+            &predecessor,
+            &proof_type,
         );
         proof_id
     }

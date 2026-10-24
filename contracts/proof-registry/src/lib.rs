@@ -353,8 +353,76 @@ pub struct ProofRevoked {
     pub epoch: u32,
 }
 
+#[contractevent]
+pub struct ConsentReceiptCommitted {
+    pub proof_id_hash: BytesN<32>,
+    pub policy_hash: BytesN<32>,
+    pub receipt_version: u32,
+    pub commitment_hash: BytesN<32>,
+}
+
 #[contractimpl]
 impl ProofRegistryContract {
+    /// Records an issuer-authorized, hash-only disclosure-consent receipt.
+    /// Multiple receipts are indexed independently by their commitment hash.
+    pub fn commit_disclosure_consent(
+        env: Env,
+        proof_id_hash: BytesN<32>,
+        policy_hash: BytesN<32>,
+        receipt_version: u32,
+        receipt_hash: BytesN<32>,
+    ) -> Result<BytesN<32>, ProofError> {
+        Self::ensure_not_decommissioned(&env)?;
+        let key = DataKey::Proof(proof_id_hash.clone());
+        let record: ProofRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(ProofError::ProofNotFound)?;
+
+        if record.status == ProofStatus::Revoked {
+            return Err(ProofError::ProofAlreadyRevoked);
+        }
+
+        if record.expires_at < env.ledger().timestamp() {
+            return Err(ProofError::ProofExpired);
+        }
+
+        Self::require_auth(&record.issuer_address);
+
+        let commitment_hash = earnproof_shared::disclosure_consent_commitment(
+            &env,
+            &env.ledger().network_id(),
+            &env.current_contract_address(),
+            &proof_id_hash,
+            &policy_hash,
+            receipt_version,
+            &receipt_hash,
+        );
+        let receipt_key = DataKey::ConsentReceipt(commitment_hash.clone());
+        if env.storage().persistent().has(&receipt_key) {
+            return Err(ProofError::ConsentReceiptAlreadyCommitted);
+        }
+
+        env.storage().persistent().set(&receipt_key, &true);
+        Self::extend_proof_key_ttl(env.clone(), &receipt_key);
+        ConsentReceiptCommitted {
+            proof_id_hash,
+            policy_hash,
+            receipt_version,
+            commitment_hash: commitment_hash.clone(),
+        }
+        .publish(&env);
+        Ok(commitment_hash)
+    }
+
+    /// Checks whether a commitment hash has been indexed by this registry.
+    pub fn has_consent_receipt_commitment(env: Env, commitment_hash: BytesN<32>) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::ConsentReceipt(commitment_hash))
+    }
+
     pub fn is_decommissioned(env: Env) -> bool {
         env.storage()
             .instance()

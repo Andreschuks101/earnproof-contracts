@@ -375,7 +375,10 @@ fn admin_revoke_proof_emits_timing_and_admin_flag() {
     let deployment = Deployment::new();
     let proof_id = deployment.register_proof(0x22);
 
-    let events = deployment.capture(|| deployment.proofs.admin_revoke_proof(&proof_id));
+    let events = deployment.capture(|| {
+        let res = deployment.proofs.admin_revoke_proof(&proof_id);
+        std::eprintln!("admin_revoke_proof result: {:?}", res);
+    });
     let event = expect_single(&deployment.env, &events, "proof_revoked");
     let by_admin: bool = event.field(&deployment.env, "by_admin").unwrap();
     let record = deployment.proofs.get_proof(&proof_id);

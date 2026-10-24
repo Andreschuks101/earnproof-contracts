@@ -190,6 +190,8 @@ fn a_rotated_out_issuer_address_loses_issuer_status() {
     let expires_at = deployment.env.ledger().timestamp() + 100_000;
     let before = deployment.snapshot();
 
+    let pt = soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]);
+    let pred: Option<soroban_sdk::BytesN<32>> = None;
     authorize(
         &deployment.env,
         &old,
@@ -201,7 +203,8 @@ fn a_rotated_out_issuer_address_loses_issuer_status() {
             &old,
             &APPROVED_SCHEMA,
             &expires_at,
-            &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
+            &pred,
+            &pt,
         )
             .into_val(&deployment.env),
     );
@@ -214,7 +217,8 @@ fn a_rotated_out_issuer_address_loses_issuer_status() {
                 &old,
                 &APPROVED_SCHEMA,
                 &expires_at,
-                &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32])
+                &pred,
+                &pt,
             )
             .is_err(),
         "a rotated-out issuer address must not register proofs"
@@ -233,7 +237,8 @@ fn a_rotated_out_issuer_address_loses_issuer_status() {
             &replacement,
             &APPROVED_SCHEMA,
             &expires_at,
-            &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]),
+            &pred,
+            &pt,
         )
             .into_val(&deployment.env),
     );
@@ -246,7 +251,8 @@ fn a_rotated_out_issuer_address_loses_issuer_status() {
                 &replacement,
                 &APPROVED_SCHEMA,
                 &expires_at,
-                &soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32])
+                &pred,
+                &pt,
             )
             .is_ok(),
         "the replacement address must be able to register proofs"
@@ -332,6 +338,7 @@ fn rotating_the_config_admin_does_not_move_registry_authority() {
         "suspend_issuer",
         (&deployment.issuer_id,).into_val(&deployment.env),
     );
+    let dummy_prop = soroban_sdk::BytesN::from_array(&deployment.env, &[1u8; 32]);
     assert!(deployment
         .issuers
         .try_suspend_issuer(

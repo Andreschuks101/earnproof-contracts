@@ -1213,6 +1213,31 @@ impl ProtocolConfigContract {
         chain
     }
 
+    pub fn get_schema_statuses(
+        env: Env,
+        versions: Vec<u32>,
+    ) -> Result<Vec<SchemaStatusResult>, ContractError> {
+        if versions.len() > MAX_SCHEMA_STATUS_BATCH {
+            return Err(ContractError::BatchTooLarge);
+        }
+
+        let mut results = Vec::new(&env);
+        for version in versions.iter() {
+            let state = if version == 0 {
+                SchemaVersionState::Unknown
+            } else {
+                let key = DataKey::SchemaVersion(version);
+                match env.storage().persistent().get::<DataKey, bool>(&key) {
+                    Some(true) => SchemaVersionState::Approved,
+                    Some(false) => SchemaVersionState::Deprecated,
+                    None => SchemaVersionState::Unknown,
+                }
+            };
+            results.push_back(SchemaStatusResult { version, state });
+        }
+        Ok(results)
+    }
+
     pub fn is_schema_version_approved(env: Env, version: u32) -> bool {
         if version == 0 {
             return false;

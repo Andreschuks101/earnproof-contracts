@@ -17,6 +17,9 @@
 //! partitions it with `has()`, which is contract-scoped, so each contract is
 //! measured against its own entries only.
 
+pub fn consent_receipt_key(env: &Env, commitment: &BytesN<32>) -> (Symbol, BytesN<32>) {
+    (Symbol::new(env, "ConsentReceipt"), commitment.clone())
+}
 use earnproof_shared::StorageClass;
 use soroban_sdk::testutils::storage::{Instance as _, Persistent as _, Temporary as _};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
@@ -432,6 +435,7 @@ pub fn exercised_deployment() -> Deployment {
         &bytes32(&env, 11),
         &bytes32(&env, 99),
     );
+    let prop1 = bytes32(&env, 101);
     issuers.suspend_issuer(
         &soroban_sdk::BytesN::from_array(&env, &{
             let mut a = [0xA5u8; 32];
@@ -442,6 +446,7 @@ pub fn exercised_deployment() -> Deployment {
         &bytes32(&env, 10),
         &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
     );
+    let prop2 = bytes32(&env, 102);
     issuers.reactivate_issuer(
         &soroban_sdk::BytesN::from_array(&env, &{
             let mut a = [0xA5u8; 32];
@@ -459,6 +464,7 @@ pub fn exercised_deployment() -> Deployment {
         &bytes32(&env, 21),
         &bytes32(&env, 99),
     );
+    let prop3 = bytes32(&env, 103);
     issuers.revoke_issuer(
         &soroban_sdk::BytesN::from_array(&env, &{
             let mut a = [0xA5u8; 32];
@@ -475,6 +481,7 @@ pub fn exercised_deployment() -> Deployment {
         &bytes32(&env, 31),
         &bytes32(&env, 99),
     );
+    let prop4 = bytes32(&env, 104);
     issuers.suspend_issuer(
         &soroban_sdk::BytesN::from_array(&env, &{
             let mut a = [0xA5u8; 32];

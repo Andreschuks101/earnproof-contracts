@@ -322,6 +322,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
         &bytes32(env, 21),
         &bytes32(env, 99),
     );
+    let prop_rev = bytes32(env, 33);
     initial_dep.issuers.revoke_issuer(
         &soroban_sdk::BytesN::from_array(env, &{
             let mut a = [0xA5u8; 32];
@@ -340,6 +341,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
                 .try_update_issuer(&bytes32(env, 20), &bytes32(env, 22)),
         ),
     );
+    let prop_react = bytes32(env, 34);
     observed.record(
         "issuer-registry reactivate revoked issuer",
         code(initial_dep.issuers.try_reactivate_issuer(
@@ -550,6 +552,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
     // 308: IssuerInactive — suspend the issuer then attempt registration.
     let deployment3 = deployment();
     let env3 = &deployment3.env;
+    let prop_susp = bytes32(env3, 49);
     deployment3.issuers.suspend_issuer(
         &soroban_sdk::BytesN::from_array(env3, &{
             let mut a = [0xA5u8; 32];
@@ -735,6 +738,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
     );
 
     cap.set_reactivation_cooldown(&1_000);
+    let prop_cap1 = bytes32(env, 67);
     cap.suspend_issuer(
         &soroban_sdk::BytesN::from_array(env, &{
             let mut a = [0xA5u8; 32];
@@ -745,6 +749,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
         &bytes32(env, 50),
         &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
     );
+    let prop_cap2 = bytes32(env, 68);
     observed.record(
         "issuer-registry reactivate before cooldown",
         code(cap.try_reactivate_issuer(
@@ -819,6 +824,7 @@ fn a_suspended_issuer_is_reported_as_issuer_inactive() {
         &bytes32(env, 41),
         &bytes32(env, 99),
     );
+    let prop_cap5 = bytes32(env, 87);
     deployment.issuers.suspend_issuer(
         &soroban_sdk::BytesN::from_array(env, &{
             let mut a = [0xA5u8; 32];

@@ -12,6 +12,7 @@
 //! indexer reading the event gets the exact value the backend originally
 //! computed, round-tripped through a real contract invocation.
 
+use earnproof_shared::disclosure_consent_commitment;
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{Address, BytesN, Env, Symbol, TryFromVal, Val};
@@ -457,6 +458,8 @@ fn consent_receipt_commitment_returned_by_contract_matches_shared_helper() {
     let proof_id = BytesN::from_array(&env, &[0x63; 32]);
     let policy_hash = BytesN::from_array(&env, &[0x64; 32]);
     let receipt_hash = BytesN::from_array(&env, &[0x65; 32]);
+    let pt = BytesN::from_array(&env, &[1u8; 32]);
+    config.approve_proof_type(&pt);
     proofs.register_proof(
         &proof_id,
         &BytesN::from_array(&env, &[0x66; 32]),

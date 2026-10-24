@@ -465,6 +465,7 @@ fn matrix() -> std::vec::Vec<Case> {
             // rejected by a state precondition rather than by authorization.
             setup: |d| d.suspend_issuer(&d.issuer_id),
             call: |d, identity| {
+                let proposal = soroban_sdk::BytesN::from_array(&d.env, &[2u8; 32]);
                 let reason = soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]);
                 let pid = soroban_sdk::BytesN::from_array(&d.env, &[0xA6u8; 32]);
                 let args: soroban_sdk::Vec<Val> = (&pid, &d.issuer_id, &reason).into_val(&d.env);
@@ -505,6 +506,7 @@ fn matrix() -> std::vec::Vec<Case> {
             uninitialized: false,
             setup: no_setup,
             call: |d, identity| {
+                let proposal = soroban_sdk::BytesN::from_array(&d.env, &[3u8; 32]);
                 let reason = soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]);
                 let pid = soroban_sdk::BytesN::from_array(&d.env, &[0xA6u8; 32]);
                 let args: soroban_sdk::Vec<Val> = (&pid, &d.issuer_id, &reason).into_val(&d.env);
@@ -561,7 +563,7 @@ fn matrix() -> std::vec::Vec<Case> {
                     Identity::Authorized => {
                         authorize(
                             &d.env,
-                            &d.admin,
+                            &d.issuer,
                             &d.issuers_address,
                             "rotate_issuer_address",
                             args,
@@ -617,13 +619,16 @@ fn matrix() -> std::vec::Vec<Case> {
                 let proof_id = hash(&d.env, 0x80);
                 let commitment = hash(&d.env, 0x81);
                 let expires_at = d.env.ledger().timestamp() + 100_000;
+                let pt = soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]);
+                let pred: Option<soroban_sdk::BytesN<32>> = None;
                 let args: soroban_sdk::Vec<Val> = (
                     &proof_id,
                     &commitment,
                     &d.issuer,
                     &APPROVED_SCHEMA,
                     &expires_at,
-                    &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]),
+                    &pred,
+                    &pt,
                 )
                     .into_val(&d.env);
                 match identity {
@@ -635,7 +640,8 @@ fn matrix() -> std::vec::Vec<Case> {
                             &d.issuer,
                             &APPROVED_SCHEMA,
                             &expires_at,
-                            &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]),
+                            &pred,
+                            &pt,
                         )
                         .is_ok(),
                     // The realistic "wrong" signer is a *different active
@@ -656,7 +662,8 @@ fn matrix() -> std::vec::Vec<Case> {
                                 &d.issuer,
                                 &APPROVED_SCHEMA,
                                 &expires_at,
-                                &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]),
+                                &pred,
+                                &pt,
                             )
                             .is_ok()
                     }
@@ -675,7 +682,8 @@ fn matrix() -> std::vec::Vec<Case> {
                                 &d.issuer,
                                 &APPROVED_SCHEMA,
                                 &expires_at,
-                                &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]),
+                                &pred,
+                                &pt,
                             )
                             .is_ok()
                     }

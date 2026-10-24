@@ -110,6 +110,7 @@ fn compromise_is_terminal_and_failed_transitions_do_not_advance() {
 fn lifecycle_queries_are_bounded_and_retirement_is_admin_only() {
     let (env, client, _admin, issuer_id) = setup();
     let key_hash = hash(&env, 30);
+    let reason = hash(&env, 31);
     assert_eq!(
         client.try_record_signing_key_compromise(&issuer_id, &key_hash, &1),
         Err(Ok(IssuerError::InvalidTransition))

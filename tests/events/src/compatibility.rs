@@ -129,6 +129,19 @@ const DECLARED_EVENTS: &[(&str, &[&str])] = &[
             "epoch",
         ],
     ),
+    (
+        "issuer_rotation_nominated",
+        &[
+            "issuer_id_hash",
+            "old_address",
+            "new_address",
+            "expires_at_ledger",
+        ],
+    ),
+    (
+        "issuer_rotation_cancelled",
+        &["issuer_id_hash", "cancelled_by"],
+    ),
     // proof-registry
     (
         "proof_registered",

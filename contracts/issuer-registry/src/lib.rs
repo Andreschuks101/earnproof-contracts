@@ -20,6 +20,7 @@ use earnproof_shared::{
 use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, BytesN, Env, Vec};
 
 const ISSUER_ROTATION_EXPIRY_LEDGERS: u32 = 518_400;
+const MAX_BULK_SUSPENSION_BATCH: u32 = 20;
 
 #[contract]
 pub struct IssuerRegistryContract;
@@ -1455,7 +1456,7 @@ impl IssuerRegistryContract {
         let record = CompromisedSigningKeyRecord {
             record_version: 1,
             issuer_id_hash: issuer_id.clone(),
-            key_hash,
+            key_hash: key_hash.clone(),
             algorithm,
             effective_ledger: env.ledger().sequence(),
             reason_hash,
@@ -1463,7 +1464,7 @@ impl IssuerRegistryContract {
         };
 
         let history_key = DataKey::CompromisedSigningKeyHistory(issuer_id.clone(), sequence);
-        let count_key = DataKey::CompromisedSigningKeyCount(issuer_id);
+        let count_key = DataKey::CompromisedSigningKeyCount(issuer_id.clone());
         env.storage().persistent().set(&marker, &record);
         env.storage().persistent().set(&history_key, &record);
         env.storage().persistent().set(&count_key, &(sequence + 1));
@@ -1480,6 +1481,18 @@ impl IssuerRegistryContract {
         if pending_matches {
             env.storage().persistent().remove(&pending_key);
         }
+        let lifecycle_sequence =
+            Self::checked_signing_key_sequence(env.clone(), issuer_id.clone(), 1)
+                .unwrap_or(u64::from(sequence + 1));
+        let _ = Self::append_signing_key_transition(
+            env.clone(),
+            issuer_id.clone(),
+            key_hash,
+            algorithm,
+            SigningKeyLifecycleTransition::Compromised,
+            lifecycle_sequence,
+        );
+        Self::store_signing_key_sequence(env.clone(), issuer_id, lifecycle_sequence);
         IssuerSigningKeyCompromised {
             record: record.clone(),
             marked_by: admin,
@@ -1700,6 +1713,58 @@ impl IssuerRegistryContract {
             sequence += 1;
         }
         Ok(records)
+    }
+
+    pub fn suspend_issuers(
+        env: Env,
+        issuer_id_hashes: Vec<BytesN<32>>,
+        incident_commitment: BytesN<32>,
+    ) -> Result<(), IssuerError> {
+        Self::assert_operational(&env);
+        if issuer_id_hashes.is_empty()
+            || issuer_id_hashes.len() > MAX_BULK_SUSPENSION_BATCH
+            || incident_commitment == BytesN::from_array(&env, &[0u8; 32])
+        {
+            return Err(IssuerError::InvalidTransition);
+        }
+        let admin = Self::get_admin(env.clone()).map_err(|_| IssuerError::IssuerNotFound)?;
+        Self::require_auth(&admin);
+
+        let mut records = Vec::new(&env);
+        for index in 0..issuer_id_hashes.len() {
+            let issuer_id_hash = issuer_id_hashes.get(index).unwrap();
+            for prior_index in 0..index {
+                if issuer_id_hashes.get(prior_index).unwrap() == issuer_id_hash {
+                    return Err(IssuerError::InvalidTransition);
+                }
+            }
+            let record: IssuerRecord = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Issuer(issuer_id_hash))
+                .ok_or(IssuerError::IssuerNotFound)?;
+            if record.status == IssuerStatus::Revoked {
+                return Err(IssuerError::IssuerRevoked);
+            }
+            if record.status == IssuerStatus::Suspended {
+                return Err(IssuerError::InvalidTransition);
+            }
+            records.push_back(record);
+        }
+
+        let now = env.ledger().timestamp();
+        for index in 0..records.len() {
+            let mut record = records.get(index).unwrap();
+            record.status = IssuerStatus::Suspended;
+            record.reason_commitment = Some(incident_commitment.clone());
+            record.status_effective_ledger = env.ledger().sequence();
+            record.status_effective_timestamp = now;
+            record.updated_at = now;
+            let key = DataKey::Issuer(record.issuer_id_hash.clone());
+            env.storage().persistent().set(&key, &record);
+            Self::extend_issuer_key_ttl(env.clone(), &key);
+        }
+        Ok(())
     }
 
     pub fn suspend_issuer(
@@ -2007,7 +2072,11 @@ impl IssuerRegistryContract {
                 .get::<DataKey, IssuerRecord>(&key)
             {
                 Some(record) => {
-                    Self::extend_issuer_key_ttl(env.clone(), &key);
+                    env.storage().persistent().extend_ttl(
+                        &key,
+                        TTL_THRESHOLD_LEDGERS,
+                        TTL_EXTEND_TO_LEDGERS,
+                    );
                     match record.status {
                         IssuerStatus::Active => IssuerQueryStatus::Active,
                         IssuerStatus::Suspended => IssuerQueryStatus::Suspended,
