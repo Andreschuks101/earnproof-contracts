@@ -24,6 +24,12 @@
 97	ApprovalProposalExpired	ContractError	common	returned	after-operator-action	409
 98	InsufficientApprovals	ContractError	common	returned	after-operator-action	412
 99	InvalidApprovalPolicy	ContractError	common	returned	after-caller-change	400
+100	HashAlgorithmNotFound	ProtocolConfigError	protocol-config	returned	after-caller-change	404
+101	InvalidHashAlgorithmTransition	ProtocolConfigError	protocol-config	returned	never	409
+102	HashAlgorithmDeprecated	ProtocolConfigError	protocol-config	returned	after-caller-change	400
+103	InvalidHashAlgorithmId	ProtocolConfigError	protocol-config	returned	after-caller-change	400
+104	HashAlgorithmNotActive	ProtocolConfigError	protocol-config	returned	after-operator-action	409
+105	RegistryUnavailable	ProtocolConfigError	protocol-config	returned	after-operator-action	503
 200	IssuerAlreadyRegistered	IssuerError	issuer-registry	returned	never	409
 201	IssuerNotFound	IssuerError	issuer-registry	returned	after-caller-change	404
 202	IssuerAddressAlreadyRegistered	IssuerError	issuer-registry	returned	never	409
