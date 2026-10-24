@@ -207,7 +207,7 @@ fn matrix() -> std::vec::Vec<Case> {
             expected: Available,
             setup: no_setup,
             call: |d| settled(d.issuers.try_suspend_issuer(
-                &hash(&d.env, 0x81),
+                &hash(&d.env, 0x51),
                 &issuer_id_hash(&d.env, 1),
                 &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32])
             )),
@@ -218,12 +218,12 @@ fn matrix() -> std::vec::Vec<Case> {
             setup: no_setup,
             call: |d| {
                 d.issuers.suspend_issuer(
-                    &hash(&d.env, 0x82),
+                    &hash(&d.env, 0x52),
                     &issuer_id_hash(&d.env, 1),
                     &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]),
                 );
                 settled(d.issuers.try_reactivate_issuer(
-                    &hash(&d.env, 0x83),
+                    &hash(&d.env, 0x53),
                     &issuer_id_hash(&d.env, 1),
                     &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]),
                 ))
@@ -234,7 +234,7 @@ fn matrix() -> std::vec::Vec<Case> {
             expected: Available,
             setup: no_setup,
             call: |d| settled(d.issuers.try_revoke_issuer(
-                &hash(&d.env, 0x84),
+                &hash(&d.env, 0x54),
                 &issuer_id_hash(&d.env, 1),
                 &soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32])
             )),
@@ -299,7 +299,7 @@ fn matrix() -> std::vec::Vec<Case> {
             expected: Contained,
             setup: no_setup,
             call: |d| {
-                settled(d.proofs.try_register_proof_with_type_identifier(
+                settled(d.proofs.try_register_proof_typed(
                     &hash(&d.env, 0x21),
                     &hash(&d.env, 0x22),
                     &d.issuer,
@@ -425,7 +425,7 @@ fn containment_survives_repeated_pause_calls() {
     assert!(
         deployment
             .proofs
-            .try_register_proof_with_type_identifier(
+            .try_register_proof_typed(
                 &hash(&deployment.env, 0x51),
                 &hash(&deployment.env, 0x52),
                 &deployment.issuer,

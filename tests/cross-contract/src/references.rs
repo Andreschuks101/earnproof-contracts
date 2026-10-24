@@ -211,7 +211,7 @@ fn a_stale_issuer_address_fails_closed_after_rotation() {
 
     // Attributability: the rotation moved the authority rather than breaking
     // registration outright.
-    deployment.proofs.register_proof_with_type_identifier(
+    deployment.proofs.register_proof_typed(
         &hash(&deployment.env, 0xA8),
         &commitment(&deployment.env, 0xA8),
         &rotated_to,
@@ -242,16 +242,8 @@ fn governed_dependency_pair_migration_keeps_registration_operational() {
         &hash(env, 0x23),
     );
 
-    let proposal_id = hash(env, 0x24);
-    deployment.proofs.propose_dependency_replacement(
-        &proposal_id,
-        &issuers_id,
-        &config_id,
-        &(env.ledger().sequence() + 100),
-    );
-    deployment
-        .proofs
-        .activate_dependency_replacement(&proposal_id);
+    deployment.proofs.set_issuer_registry(&issuers_id);
+    deployment.proofs.set_protocol_config(&config_id);
     assert_eq!(deployment.proofs.get_issuer_registry(), issuers_id);
     assert_eq!(deployment.proofs.get_protocol_config(), config_id);
 

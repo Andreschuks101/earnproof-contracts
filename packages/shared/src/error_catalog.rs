@@ -155,7 +155,7 @@ pub struct ErrorSpec {
 }
 
 /// Every published error, ordered by code.
-pub const ERROR_CATALOG: [ErrorSpec; 64] = [
+pub const ERROR_CATALOG: [ErrorSpec; 70] = [
     ErrorSpec {
         code: 1,
         name: "AlreadyInitialized",
@@ -309,7 +309,7 @@ pub const ERROR_CATALOG: [ErrorSpec; 64] = [
         cause: "An upgrade was attempted without a recorded approval.",
         retry: Retry::AfterOperatorAction,
         remediation: "Have the authorized admin approve the target WASM and version before retrying.",
-        http_status: 409,
+        http_status: 412,
         client_message: "No upgrade approval was found",
     },
     ErrorSpec {
@@ -369,7 +369,7 @@ pub const ERROR_CATALOG: [ErrorSpec; 64] = [
         cause: "A critical action requires a threshold-approved proposal instead of direct execution.",
         retry: Retry::AfterOperatorAction,
         remediation: "Create a proposal for the canonical action, collect the configured signer threshold, and execute that proposal.",
-        http_status: 409,
+        http_status: 412,
         client_message: "Threshold approval is required",
     },
     ErrorSpec {
@@ -405,7 +405,7 @@ pub const ERROR_CATALOG: [ErrorSpec; 64] = [
         cause: "The proposal has fewer unique authorized signer approvals than its policy threshold.",
         retry: Retry::AfterOperatorAction,
         remediation: "Collect approvals from additional configured signers before execution.",
-        http_status: 409,
+        http_status: 412,
         client_message: "Approval threshold has not been reached",
     },
     ErrorSpec {
@@ -514,7 +514,7 @@ pub const ERROR_CATALOG: [ErrorSpec; 64] = [
         retry: Retry::AfterCallerChange,
         remediation: "Supply a canonical issuer address and nonzero commitment values required by the selected operation.",
         http_status: 400,
-        client_message: "Invalid issuer address or parameters",
+        client_message: "Invalid issuer address or input",
     },
     ErrorSpec {
         code: 208,
@@ -923,6 +923,78 @@ pub const ERROR_CATALOG: [ErrorSpec; 64] = [
         remediation: "Query get_nullifier_domain_versions and submit a nullifier derived under a currently supported version.",
         http_status: 400,
         client_message: "Unsupported nullifier domain version",
+    },
+    ErrorSpec {
+        code: 327,
+        name: "ConsentReceiptAlreadyCommitted",
+        enum_name: "ProofError",
+        domain: Domain::ProofRegistry,
+        status: Status::Returned,
+        cause: "The same disclosure-consent receipt commitment was already recorded for this proof, policy, receipt version, and receipt hash.",
+        retry: Retry::Never,
+        remediation: "Treat the receipt as already anchored. Query has_consent_receipt_commitment instead of replaying the commit.",
+        http_status: 409,
+        client_message: "Consent receipt is already committed",
+    },
+    ErrorSpec {
+        code: 328,
+        name: "ConsentAlreadyWithdrawn",
+        enum_name: "ProofError",
+        domain: Domain::ProofRegistry,
+        status: Status::Returned,
+        cause: "Consent for this proof and policy was already withdrawn; a withdrawal is final and recorded once.",
+        retry: Retry::Never,
+        remediation: "Treat consent as withdrawn. Query is_consent_withdrawn instead of resubmitting.",
+        http_status: 409,
+        client_message: "Consent is already withdrawn",
+    },
+    ErrorSpec {
+        code: 329,
+        name: "ConsentWithdrawn",
+        enum_name: "ProofError",
+        domain: Domain::ProofRegistry,
+        status: Status::Returned,
+        cause: "A disclosure-consent receipt cannot be committed because consent for this proof and policy was withdrawn.",
+        retry: Retry::Never,
+        remediation: "Do not anchor new receipts for this pair. A new proof or policy hash is required for fresh consent.",
+        http_status: 409,
+        client_message: "Consent has been withdrawn",
+    },
+    ErrorSpec {
+        code: 330,
+        name: "StaleConsentWithdrawalSequence",
+        enum_name: "ProofError",
+        domain: Domain::ProofRegistry,
+        status: Status::Returned,
+        cause: "The expected withdrawal sequence does not match the next sequence, so the request was replayed or raced by another withdrawal.",
+        retry: Retry::AfterCallerChange,
+        remediation: "Re-read get_consent_withdrawal_count, then resubmit with the next sequence if the withdrawal is still needed.",
+        http_status: 409,
+        client_message: "Withdrawal request is out of date",
+    },
+    ErrorSpec {
+        code: 331,
+        name: "InvalidConsentWithdrawalReason",
+        enum_name: "ProofError",
+        domain: Domain::ProofRegistry,
+        status: Status::Returned,
+        cause: "The withdrawal reason code is outside the published version-1 range 1 to 4.",
+        retry: Retry::Never,
+        remediation: "Use a published reason code. Reason text is never accepted on chain.",
+        http_status: 400,
+        client_message: "Withdrawal reason is not valid",
+    },
+    ErrorSpec {
+        code: 332,
+        name: "UnsupportedEventDomain",
+        enum_name: "ProofError",
+        domain: Domain::ProofRegistry,
+        status: Status::Returned,
+        cause: "The contract does not report a sequence range for the requested event domain.",
+        retry: Retry::Never,
+        remediation: "Query the domain on the contract that emits it: config-change and pause acknowledgements on protocol-config, consent withdrawals on proof-registry.",
+        http_status: 400,
+        client_message: "Event domain is not supported",
     },
 ];
 
