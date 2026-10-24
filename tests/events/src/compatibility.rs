@@ -177,6 +177,9 @@ const DECLARED_EVENTS: &[(&str, &[&str])] = &[
             "revoked_ledger",
             "by_admin",
             "epoch",
+            "policy_version",
+            "actor_role",
+            "authorization_domain",
         ],
     ),
     (

@@ -4,7 +4,10 @@ use soroban_sdk::{
     contracterror, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env, String, Symbol, Vec,
 };
 
+pub mod policy_bindings;
 pub mod storage_namespaces;
+
+pub use policy_bindings::*;
 
 pub use storage_namespaces::{StorageClass, StorageNamespace, STORAGE_NAMESPACES};
 pub mod error_catalog;
