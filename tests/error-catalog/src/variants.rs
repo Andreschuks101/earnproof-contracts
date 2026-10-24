@@ -361,43 +361,33 @@ fn declared_variants() -> std::vec::Vec<(&'static str, &'static str, u32)> {
         ),
         (
             "ProofError",
-            "StalePolicyVersion",
-            ProofError::StalePolicyVersion as u32,
+            "ConsentReceiptAlreadyCommitted",
+            ProofError::ConsentReceiptAlreadyCommitted as u32,
         ),
         (
             "ProofError",
-            "ActivationNotEligible",
-            ProofError::ActivationNotEligible as u32,
+            "ConsentAlreadyWithdrawn",
+            ProofError::ConsentAlreadyWithdrawn as u32,
         ),
         (
             "ProofError",
-            "ActivationAlreadyAcknowledged",
-            ProofError::ActivationAlreadyAcknowledged as u32,
+            "ConsentWithdrawn",
+            ProofError::ConsentWithdrawn as u32,
         ),
         (
             "ProofError",
-            "UnauthorizedActivator",
-            ProofError::UnauthorizedActivator as u32,
+            "StaleConsentWithdrawalSequence",
+            ProofError::StaleConsentWithdrawalSequence as u32,
         ),
         (
             "ProofError",
-            "ResolverConflictOfInterest",
-            ProofError::ResolverConflictOfInterest as u32,
+            "InvalidConsentWithdrawalReason",
+            ProofError::InvalidConsentWithdrawalReason as u32,
         ),
         (
             "ProofError",
-            "ResolverNotRegistered",
-            ProofError::ResolverNotRegistered as u32,
-        ),
-        (
-            "ProofError",
-            "InvalidPolicyVersion",
-            ProofError::InvalidPolicyVersion as u32,
-        ),
-        (
-            "ProofError",
-            "ParticipantCommitmentLocked",
-            ProofError::ParticipantCommitmentLocked as u32,
+            "UnsupportedEventDomain",
+            ProofError::UnsupportedEventDomain as u32,
         ),
     ]
 }

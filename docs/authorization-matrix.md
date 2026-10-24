@@ -49,9 +49,7 @@ immediate admin mutations in either mode.
 | `unpause` | Current admin | ❌ Rejected | ❌ Rejected | ✅ Accepted |
 | `approve_schema_version` | Current admin | ❌ Rejected | ❌ Rejected | ✅ Accepted |
 | `deprecate_schema_version` | Current admin | ❌ Rejected | ❌ Rejected | ✅ Accepted |
-| `approve_hash_algorithm` | Admin | ❌ Rejected | ❌ Rejected | ✅ Accepted |
-| `activate_hash_algorithm` | Admin | ❌ Rejected | ❌ Rejected | ✅ Accepted |
-| `deprecate_hash_algorithm` | Admin | ❌ Rejected | ❌ Rejected | ✅ Accepted |
+| `set_history_retention` | Current admin | ❌ Rejected | ❌ Rejected | ✅ Accepted |
 
 ### issuer-registry
 
@@ -74,17 +72,7 @@ immediate admin mutations in either mode.
 | `commit_disclosure_consent` | Proof's issuer | ❌ Rejected | ❌ Rejected | Different active issuer ❌ Rejected | ✅ Accepted |
 | `revoke_proof` | Proof's issuer | ❌ Rejected | ❌ Rejected | Different active issuer ❌ Rejected | ✅ Accepted |
 | `admin_revoke_proof` | Registry admin | ❌ Rejected | ❌ Rejected | Proof's own issuer ❌ Rejected | ✅ Accepted |
-| `set_authority_policy_version` | Registry admin | ❌ Rejected | ❌ Rejected | — | ✅ Accepted |
-| `revoke_proof_at_policy` | Proof's issuer | ❌ Rejected | ❌ Rejected | Different active issuer ❌ Rejected | ✅ Accepted |
-| `admin_revoke_proof_at_policy` | Registry admin | ❌ Rejected | ❌ Rejected | Proof's own issuer ❌ Rejected | ✅ Accepted |
-| `set_activation_delegate` | Named issuer | ❌ Rejected | ❌ Rejected | Different active issuer ❌ Rejected | ✅ Accepted |
-| `acknowledge_activation` | Proof's issuer or its authorized delegate | ❌ Rejected | ❌ Rejected | Unauthorized issuer ❌ Rejected | ✅ Accepted |
-| `register_dispute_resolver` | Registry admin | ❌ Rejected | ❌ Rejected | Issuer ❌ Rejected | ✅ Accepted |
-| `remove_dispute_resolver` | Registry admin | ❌ Rejected | ❌ Rejected | Issuer ❌ Rejected | ✅ Accepted |
-| `bind_participant_commitment` | The participant address | ❌ Rejected | ❌ Rejected | Other issuer ❌ Rejected | ✅ Accepted |
-| `authorize_subject_actor` | Proof's issuer | ❌ Rejected | ❌ Rejected | Different active issuer ❌ Rejected | ✅ Accepted |
-| `resolve_dispute_as` | Registered resolver | ❌ Rejected | ❌ Rejected | Issuer ❌ Rejected | ✅ Accepted |
-| `reject_dispute_as` | Registered resolver | ❌ Rejected | ❌ Rejected | Issuer ❌ Rejected | ✅ Accepted |
+| `withdraw_disclosure_consent` | Proof's issuer | ❌ Rejected | ❌ Rejected | Different active issuer ❌ Rejected | ✅ Accepted |
 
 ## Read-only entry points (no authorization required)
 
@@ -171,7 +159,7 @@ Some rows require fixture state before the authorization attempt:
 The guard constant in `matrix.rs`:
 
 ```rust
-const DOCUMENTED_MUTATIONS: usize = 32;
+const DOCUMENTED_MUTATIONS: usize = 20;
 ```
 
 Bump this constant **only together with** this document when a new mutating
@@ -182,11 +170,11 @@ fails immediately when the counts disagree.
 
 | Metric | Count |
 |--------|-------|
-| Mutating entry points | 32 |
+| Mutating entry points | 20 |
 | Read-only entry points | 17 |
-| Negative matrix rows (Missing × 32) | 32 |
-| Negative matrix rows (Wrong × 32) | 32 |
-| Control rows (Authorized × 32) | 32 |
+| Negative matrix rows (Missing × 20) | 20 |
+| Negative matrix rows (Wrong × 20) | 20 |
+| Control rows (Authorized × 20) | 20 |
 | Cross-role boundary tests | 4 |
 | Authorization tree assertions | 4 |
 | Stale/former-admin tests | 6 |
