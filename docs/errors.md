@@ -134,9 +134,9 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 | 315 | `DisputeNotOpen` | `ProofError` | proof-registry | returned | never | 400 |
 | 316 | `UnsupportedProofType` | `ProofError` | proof-registry | returned | after-operator-action | 400 |
 | 317 | `InvalidProofContext` | `ProofError` | proof-registry | reserved | after-caller-change | 400 |
-| 318 | `ProofCapacityReached` | `ProofError` | proof-registry | returned | after-operator-action | 409 |
-| 319 | `ProofAccountingUnavailable` | `ProofError` | proof-registry | returned | after-operator-action | 503 |
-| 320 | `ProofCountOverflow` | `ProofError` | proof-registry | returned | after-operator-action | 503 |
+| 318 | `ProofCapacityReached` | `ProofError` | proof-registry | reserved | after-operator-action | 409 |
+| 319 | `ProofAccountingUnavailable` | `ProofError` | proof-registry | reserved | after-operator-action | 503 |
+| 320 | `ProofCountOverflow` | `ProofError` | proof-registry | reserved | after-operator-action | 503 |
 | 321 | `CyclicSupersession` | `ProofError` | proof-registry | returned | never | 400 |
 | 322 | `CrossIssuerSupersession` | `ProofError` | proof-registry | returned | never | 403 |
 | 323 | `PredecessorNotFound` | `ProofError` | proof-registry | returned | after-caller-change | 404 |
@@ -343,7 +343,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ContractError`
 - Domain: common
-- Status: returned
+- Status: reserved
 - Retry: after-operator-action
 - Cause: A critical action requires a threshold-approved proposal instead of direct execution.
 - Remediation: Create a proposal for the canonical action, collect the configured signer threshold, and execute that proposal.
@@ -354,7 +354,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ContractError`
 - Domain: common
-- Status: returned
+- Status: reserved
 - Retry: after-caller-change
 - Cause: The requested critical-action proposal does not exist or has already been consumed.
 - Remediation: Use an existing proposal identifier for this contract, or create a new proposal.
@@ -365,7 +365,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ContractError`
 - Domain: common
-- Status: returned
+- Status: reserved
 - Retry: after-operator-action
 - Cause: The critical-action proposal reached its expiry ledger before execution.
 - Remediation: Create a new proposal and collect approvals again.
@@ -376,7 +376,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ContractError`
 - Domain: common
-- Status: returned
+- Status: reserved
 - Retry: after-operator-action
 - Cause: The proposal has fewer unique authorized signer approvals than its policy threshold.
 - Remediation: Collect approvals from additional configured signers before execution.
@@ -387,7 +387,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ContractError`
 - Domain: common
-- Status: returned
+- Status: reserved
 - Retry: after-caller-change
 - Cause: The approval policy has an invalid threshold, signer count, or duplicate signer.
 - Remediation: Configure a non-empty unique signer set with a threshold between one and the signer count.
@@ -761,7 +761,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ProofError`
 - Domain: proof-registry
-- Status: returned
+- Status: reserved
 - Retry: after-operator-action
 - Cause: The proof registry has reached its configured capacity.
 - Remediation: An operator must increase the proof capacity or archive eligible proofs before registration can continue.
@@ -772,7 +772,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ProofError`
 - Domain: proof-registry
-- Status: returned
+- Status: reserved
 - Retry: after-operator-action
 - Cause: Stored proof counts are missing or inconsistent, so an accounting operation cannot proceed safely.
 - Remediation: Reconcile proof counts and verify the reported counters before retrying the operation.
@@ -783,7 +783,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ProofError`
 - Domain: proof-registry
-- Status: returned
+- Status: reserved
 - Retry: after-operator-action
 - Cause: A proof count cannot be incremented without overflowing its storage type.
 - Remediation: Reconcile the proof counters or raise the configured capacity before registering more proofs.
@@ -838,7 +838,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ProofError`
 - Domain: proof-registry
-- Status: returned
+- Status: reserved
 - Retry: never
 - Cause: The governed dispute filing window has not opened, has closed, or its lifecycle anchor is unavailable.
 - Remediation: Read get_dispute_filing_eligibility before filing and do not replay a request outside its reported half-open window.
@@ -849,7 +849,7 @@ A Soroban contract error is a type and a number. It carries no message, no paylo
 
 - Enum: `ProofError`
 - Domain: proof-registry
-- Status: returned
+- Status: reserved
 - Retry: after-operator-action
 - Cause: The proof supplied a subject-nullifier domain version that protocol governance does not support.
 - Remediation: Query get_nullifier_domain_versions and submit a nullifier derived under a currently supported version.

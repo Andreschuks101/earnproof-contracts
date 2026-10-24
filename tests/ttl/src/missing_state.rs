@@ -1,3 +1,4 @@
+#![allow(clippy::needless_borrow)]
 //! Behaviour when registry or configuration state is absent.
 //!
 //! Archival is not the only way state can be missing: a contract can be called

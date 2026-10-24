@@ -97,13 +97,11 @@ fn compromise_is_terminal_and_failed_transitions_do_not_advance() {
         Err(Ok(IssuerError::InvalidTransition))
     );
     assert_eq!(client.get_signing_key_usage_sequence(&issuer_id), 2);
-    assert_eq!(
-        client
-            .get_issuer_signing_key_state(&issuer_id, &key_hash, &1)
-            .unwrap()
-            .transition,
-        SigningKeyLifecycleTransition::Compromised
-    );
+    let state = client
+        .get_issuer_signing_key_state(&issuer_id, &key_hash, &1)
+        .unwrap();
+    assert_eq!(state.sequence, 2);
+    assert_eq!(state.transition, SigningKeyLifecycleTransition::Compromised);
 }
 
 #[test]

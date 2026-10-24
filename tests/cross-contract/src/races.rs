@@ -53,6 +53,8 @@ const UPDATES: [Update; 7] = [
     Update::RevokeIssuer,
 ];
 
+static PROPOSAL_SEQ: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(1);
+
 fn apply(deployment: &Deployment, update: Update) {
     static PROPOSAL_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let id = PROPOSAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

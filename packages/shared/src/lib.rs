@@ -86,6 +86,149 @@ pub struct MigrationStatus {
     pub complete: bool,
 }
 
+pub const MIGRATION_CHECKPOINT_VERSION: u32 = 1;
+
+/// Deterministic migration checkpoint recording processed ranges, counts, and checksum.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MigrationCheckpoint {
+    pub checkpoint_version: u32,
+    pub source_version: u32,
+    pub target_version: u32,
+    pub cursor_start: u32,
+    pub cursor_end: u32,
+    pub processed_count: u32,
+    pub total_items: u32,
+    pub checksum: BytesN<32>,
+}
+
+pub fn compute_migration_checkpoint_checksum(
+    env: &Env,
+    source_version: u32,
+    target_version: u32,
+    cursor_start: u32,
+    cursor_end: u32,
+    processed_count: u32,
+    total_items: u32,
+) -> BytesN<32> {
+    let mut payload = soroban_sdk::Bytes::new(env);
+    payload.append(&env.ledger().network_id().into());
+    payload.append(&env.current_contract_address().to_xdr(env));
+    payload.extend_from_array(&MIGRATION_CHECKPOINT_VERSION.to_be_bytes());
+    payload.extend_from_array(&source_version.to_be_bytes());
+    payload.extend_from_array(&target_version.to_be_bytes());
+    payload.extend_from_array(&cursor_start.to_be_bytes());
+    payload.extend_from_array(&cursor_end.to_be_bytes());
+    payload.extend_from_array(&processed_count.to_be_bytes());
+    payload.extend_from_array(&total_items.to_be_bytes());
+    env.crypto().sha256(&payload).into()
+}
+
+pub const ERROR_CATALOG_VERSION: u32 = 1;
+pub const PROTOCOL_CONFIG_ERROR_MIN: u32 = 1;
+pub const PROTOCOL_CONFIG_ERROR_MAX: u32 = 199;
+pub const ISSUER_REGISTRY_ERROR_MIN: u32 = 200;
+pub const ISSUER_REGISTRY_ERROR_MAX: u32 = 299;
+pub const PROOF_REGISTRY_ERROR_MIN: u32 = 300;
+pub const PROOF_REGISTRY_ERROR_MAX: u32 = 399;
+
+/// Query descriptor for contract error catalog versions and code ranges.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorCatalogDescriptor {
+    pub catalog_version: u32,
+    pub min_code: u32,
+    pub max_code: u32,
+}
+
+/// Lifecycle states for nominated successor contracts.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum SuccessorState {
+    Absent = 0,
+    Pending = 1,
+    Ready = 2,
+    Decommissioned = 3,
+}
+
+/// Status descriptor for successor contract nomination and timelock progress.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SuccessorStatus {
+    pub state: SuccessorState,
+    pub successor: Option<Address>,
+    pub nominated_at_ledger: u32,
+    pub earliest_activation_ledger: u32,
+}
+
+/// Stored record of an active successor contract nomination.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SuccessorNominationRecord {
+    pub successor: Address,
+    pub nominated_at_ledger: u32,
+    pub earliest_activation_ledger: u32,
+}
+
+pub const QUERY_ENVELOPE_SCHEMA_VERSION: u32 = 1;
+
+/// Common metadata header identifying query context, contract, and network.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueryEnvelopeHeader {
+    pub schema_version: u32,
+    pub contract_address: Address,
+    pub network_id: BytesN<32>,
+    pub ledger_sequence: u32,
+    pub ledger_timestamp: u64,
+    pub config_version: u32,
+}
+
+/// Capacity query response envelope.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapacityEnvelope {
+    pub header: QueryEnvelopeHeader,
+    pub active_count: u32,
+    pub max_capacity: u32,
+}
+
+/// Policy query response envelope.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyEnvelope {
+    pub header: QueryEnvelopeHeader,
+    pub policy: SchemaPolicy,
+}
+
+/// Checkpoint query response envelope.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointEnvelope {
+    pub header: QueryEnvelopeHeader,
+    pub checkpoint: MigrationCheckpoint,
+}
+
+/// History query response envelope.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryEnvelope {
+    pub header: QueryEnvelopeHeader,
+    pub total_records: u32,
+}
+
+pub fn make_query_envelope_header(env: &Env, config_version: u32) -> QueryEnvelopeHeader {
+    QueryEnvelopeHeader {
+        schema_version: QUERY_ENVELOPE_SCHEMA_VERSION,
+        contract_address: env.current_contract_address(),
+        network_id: env.ledger().network_id(),
+        ledger_sequence: env.ledger().sequence(),
+        ledger_timestamp: env.ledger().timestamp(),
+        config_version,
+    }
+}
+
 /// Canonical configuration digest payload version.
 pub const CONFIG_DIGEST_VERSION: u32 = 1;
 /// Canonical encoding version for per-schema policy digests.

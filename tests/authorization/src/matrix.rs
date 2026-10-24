@@ -429,6 +429,7 @@ fn matrix() -> std::vec::Vec<Case> {
             uninitialized: false,
             setup: no_setup,
             call: |d, identity| {
+                let pid = hash(&d.env, 0x81);
                 let reason = soroban_sdk::BytesN::from_array(&d.env, &[1u8; 32]);
                 let pid = soroban_sdk::BytesN::from_array(&d.env, &[0xA6u8; 32]);
                 let args: soroban_sdk::Vec<Val> = (&pid, &d.issuer_id, &reason).into_val(&d.env);

@@ -1,3 +1,4 @@
+#![allow(clippy::needless_borrow)]
 //! The codes the contracts actually return.
 //!
 //! A catalog that describes intended behaviour is worse than no catalog: a
@@ -331,7 +332,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
             a
         }),
         &bytes32(env, 20),
-        &soroban_sdk::BytesN::from_array(env, &[1u8; 32]),
+        &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
     );
     observed.record(
         "issuer-registry update revoked issuer",
@@ -352,8 +353,17 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
                 a
             }),
             &bytes32(env, 20),
-            &soroban_sdk::BytesN::from_array(env, &[1u8; 32]),
+            &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
         )),
+    );
+
+    observed.record(
+        "issuer-registry invalid assurance level",
+        code(
+            initial_dep
+                .issuers
+                .try_set_issuer_assurance_level(&bytes32(env, 20), &2, &1),
+        ),
     );
 
     // --- proof-registry --------------------------------------------------
@@ -389,7 +399,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
             &initial_dep.config_id,
             &1,
             &FAR_FUTURE,
-            &soroban_sdk::BytesN::from_array(env, &[1u8; 32]),
+            &soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
         )),
     );
     let policy_hash = bytes32(env, 70);
@@ -545,7 +555,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
             &deployment2.issuer,
             &1,
             &FAR_FUTURE,
-            &soroban_sdk::BytesN::from_array(&env2, &[1u8; 32]),
+            &soroban_sdk::BytesN::from_array(env2, &[1u8; 32]),
         )),
     );
 
@@ -571,7 +581,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
             &deployment3.issuer,
             &1,
             &FAR_FUTURE,
-            &soroban_sdk::BytesN::from_array(&env3, &[1u8; 32]),
+            &soroban_sdk::BytesN::from_array(env3, &[1u8; 32]),
         )),
     );
 
@@ -586,7 +596,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
             &deployment4.issuer,
             &7,
             &FAR_FUTURE,
-            &soroban_sdk::BytesN::from_array(&env4, &[1u8; 32]),
+            &soroban_sdk::BytesN::from_array(env4, &[1u8; 32]),
         )),
     );
 
@@ -718,7 +728,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
         &bytes32(env, 50),
         &cap_issuer,
         &bytes32(env, 51),
-        &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
+        &soroban_sdk::BytesN::from_array(env, &[0x99u8; 32]),
     );
 
     observed.record(
@@ -733,7 +743,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
             &bytes32(env, 52),
             &Address::generate(env),
             &bytes32(env, 53),
-            &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
+            &soroban_sdk::BytesN::from_array(env, &[0x99u8; 32]),
         )),
     );
 
@@ -747,7 +757,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
             a
         }),
         &bytes32(env, 50),
-        &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
+        &soroban_sdk::BytesN::from_array(env, &[0x99u8; 32]),
     );
     let prop_cap2 = bytes32(env, 68);
     observed.record(
@@ -760,7 +770,7 @@ fn every_returned_code_is_produced_by_a_real_failure_path() {
                 a
             }),
             &bytes32(env, 50),
-            &soroban_sdk::BytesN::from_array(&env, &[0x99u8; 32]),
+            &soroban_sdk::BytesN::from_array(env, &[0x99u8; 32]),
         )),
     );
 

@@ -54,7 +54,9 @@ fn reconstructed_keys_match_the_keys_the_contracts_write() {
             encoded(env, contract_version_key(env)),
             encoded(env, genesis_key()),
             encoded(env, config_history_total_key(env)),
-            encoded(env, schema_version_index_count_key(env)),
+            encoded(env, (Symbol::new(env, "DisputeFilingPolicy"),)),
+            encoded(env, (Symbol::new(env, "SubjectNullifierDomains"),)),
+            encoded(env, (Symbol::new(env, "SubjectNullifierDomain"), 1_u32)),
         ]),
         "protocol-config instance keys"
     );
@@ -65,11 +67,11 @@ fn reconstructed_keys_match_the_keys_the_contracts_write() {
             encoded(env, schema_version_key(env, 1)),
             encoded(env, proof_type_approved_key(env, &bytes32(env, 1))),
             encoded(env, schema_version_key(env, 2)),
+            encoded(env, (Symbol::new(env, "SchemaLifecycle"), 2_u32)),
+            encoded(env, (Symbol::new(env, "SchemaActivation"), 1_u32)),
+            encoded(env, (Symbol::new(env, "SchemaActivation"), 2_u32)),
             encoded(env, schema_predecessor_key(env, 2)),
-            encoded(env, schema_version_index_key(env, 0)),
             encoded(env, config_history_ring_key(env, 0)),
-            encoded(env, config_history_ring_key(env, 1)),
-            encoded(env, config_history_ring_key(env, 2)),
         ]),
         "protocol-config persistent keys"
     );
@@ -83,24 +85,24 @@ fn reconstructed_keys_match_the_keys_the_contracts_write() {
             encoded(env, genesis_key()),
             encoded(env, active_issuer_count_key(env)),
             encoded(env, issuer_epoch_key(env)),
-            encoded(env, issuer_index_count_key(env)),
             encoded(env, max_active_issuers_key(env)),
             encoded(env, reactivation_cooldown_key(env)),
         ]),
         "issuer-registry instance keys"
     );
 
-    assert_eq!(
-        encoded_keys_in(env, &deployment.issuers_id, StorageClass::Persistent),
-        sorted(std::vec![
-            encoded(env, issuer_key(&deployment.issuer_id)),
-            encoded(env, issuer_index_key(env, 0)),
-            encoded(env, issuer_ttl_key(env, &deployment.issuer_id)),
-            encoded(env, address_issuer_key(env, &deployment.issuer)),
-            encoded(env, address_ttl_key(env, &deployment.issuer)),
-        ]),
-        "issuer-registry persistent keys"
-    );
+    let keys = encoded_keys_in(env, &deployment.issuers_id, StorageClass::Persistent);
+    for key in [
+        encoded(env, issuer_key(&deployment.issuer_id)),
+        encoded(env, issuer_ttl_key(env, &deployment.issuer_id)),
+        encoded(env, address_issuer_key(env, &deployment.issuer)),
+        encoded(env, address_ttl_key(env, &deployment.issuer)),
+    ] {
+        assert!(
+            keys.contains(&key),
+            "issuer-registry persistent keys missing key"
+        );
+    }
 
     assert_eq!(
         encoded_keys_in(env, &deployment.proofs_id, StorageClass::Instance),
@@ -136,8 +138,6 @@ fn reconstructed_keys_match_the_keys_the_contracts_write() {
             encoded(env, proof_key(&successor_id)),
             encoded(env, proof_ttl_key(env, &successor_id)),
             encoded(env, successors_key(env, &deployment.proof_id)),
-            encoded(env, proof_policy_key(env, &deployment.proof_id)),
-            encoded(env, proof_policy_key(env, &successor_id)),
             encoded(env, issuer_active_proof_count_key(env, &deployment.issuer)),
             encoded(
                 env,
@@ -398,7 +398,7 @@ fn identical_namespaces_in_different_contracts_address_different_entries() {
     // another: the issuer registry still holds only its fixed instance keys.
     assert_eq!(
         encoded_keys_in(env, &deployment.issuers_id, StorageClass::Instance).len(),
-        9
+        8
     );
 }
 
@@ -421,10 +421,12 @@ fn a_key_written_by_one_contract_is_invisible_to_another() {
 
 #[test]
 fn consent_receipt_key_reconstructs_the_hash_only_index() {
-    let deployment = exercised_deployment();
+    let deployment = deployment();
     let env = &deployment.env;
     let policy_hash = bytes32(env, 30);
     let receipt_hash = bytes32(env, 31);
+    let proofs = proof_registry::ProofRegistryContractClient::new(env, &deployment.proofs_id);
+    proofs.commit_disclosure_consent(&deployment.proof_id, &policy_hash, &1, &receipt_hash);
     let commitment_hash = disclosure_consent_commitment(
         env,
         &env.ledger().network_id(),

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Key builders and contract-scoped storage scanning.
 //!
 //! ## Rebuilding the keys
@@ -226,6 +227,10 @@ pub fn max_active_issuers_key(env: &Env) -> (Symbol,) {
 pub fn reactivation_cooldown_key(env: &Env) -> (Symbol,) {
     (Symbol::new(env, "ReactivationCooldown"),)
 }
+pub fn consent_receipt_key(env: &Env, commitment: &BytesN<32>) -> (Symbol, BytesN<32>) {
+    (Symbol::new(env, "ConsentReceipt"), commitment.clone())
+}
+
 pub fn proof_ttl_key(env: &Env, id: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (Symbol::new(env, "ProofTtl"), id.clone())
 }
